@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Telegram Files</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #0e1621; color: #e7edf3; min-height: 100vh; }
+    .container { max-width: 900px; margin: 0 auto; padding: 20px; }
+    h1 { font-size: 20px; margin-bottom: 16px; color: #5ac8fa; }
+    .card { background: #17212b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    input, button { font-size: 15px; padding: 10px 14px; border-radius: 8px; border: none; outline: none; }
+    input { background: #0e1621; color: #fff; width: 100%; border: 1px solid #2b5278; }
+    input:focus { border-color: #5ac8fa; }
+    button { background: #5ac8fa; color: #000; cursor: pointer; font-weight: 600; width: 100%; }
+    button:hover { background: #4a9fd8; }
+    button:disabled { background: #2b5278; color: #666; cursor: not-allowed; }
+    .row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .row input { flex: 1; }
+    .row button { width: auto; }
+    .status { color: #999; font-size: 14px; margin-top: 8px; }
+    .error { color: #ff6b6b; }
+    .success { color: #51cf66; }
+    .chat-item { display: flex; align-items: center; padding: 12px; border-radius: 8px; cursor: pointer; gap: 12px; }
+    .chat-item:hover { background: #0e1621; }
+    .chat-name { font-weight: 600; }
+    .chat-sub { font-size: 13px; color: #999; }
+    .file-item { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-radius: 8px; background: #0e1621; margin-bottom: 8px; }
+    .file-name { font-size: 14px; word-break: break-all; flex: 1; }
+    .file-size { font-size: 13px; color: #999; white-space: nowrap; margin-left: 12px; }
+    .file-dl { background: #5ac8fa; color: #000; padding: 6px 16px; border-radius: 6px; font-size: 13px; white-space: nowrap; margin-left: 12px; }
+    .file-dl:hover { background: #4a9fd8; }
+    .back { color: #5ac8fa; cursor: pointer; margin-bottom: 12px; font-size: 14px; }
+    .back:hover { text-decoration: underline; }
+    .hidden { display: none; }
+    .progress { height: 4px; background: #0e1621; border-radius: 2px; margin-top: 8px; overflow: hidden; }
+    .progress-bar { height: 100%; background: #5ac8fa; width: 0%; transition: width 0.3s; }
+    .avatar { width: 40px; height: 40px; border-radius: 50%; background: #5ac8fa; color: #000; display: flex; align-items: center; justify-content: center; font-weight: 700; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Telegram Files</h1>
+
+    <!-- 登录页 -->
+    <div id="login-page" class="card">
+      <div class="row">
+        <input id="phone" placeholder="+8613800138000" />
+        <button id="send-code-btn" onclick="sendCode()">发送验证码</button>
+      </div>
+      <div id="code-row" class="row hidden">
+        <input id="code" placeholder="验证码" />
+        <button onclick="signIn()">登录</button>
+      </div>
+      <div id="password-row" class="row hidden">
+        <input id="password" type="password" placeholder="两步验证密码" />
+        <button onclick="signInWithPassword()">确认</button>
+      </div>
+      <div id="login-status" class="status"></div>
+    </div>
+
+    <!-- 聊天列表 -->
+    <div id="chat-list-page" class="hidden">
+      <div class="card">
+        <div id="chat-list"></div>
+        <div id="chat-status" class="status"></div>
+      </div>
+    </div>
+
+    <!-- 文件列表 -->
+    <div id="file-list-page" class="hidden">
+      <div class="back" onclick="showChats()">← 返回</div>
+      <div class="card">
+        <h2 id="chat-title" style="font-size:18px;margin-bottom:12px;"></h2>
+        <div id="file-list"></div>
+        <div id="file-status" class="status"></div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
