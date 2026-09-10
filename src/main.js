@@ -6,7 +6,7 @@ const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
 const API_HASH = import.meta.env.VITE_API_HASH || '';
 const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
 
-// ===== Monkey-patch WebSocket 和 fetch，实现代理 =====
+// ===== Monkey-patch WebSocket 和 fetch =====
 if (PROXY_DOMAIN) {
   const OrigWS = self.WebSocket;
   self.WebSocket = function (url, protocols) {
@@ -14,7 +14,7 @@ if (PROXY_DOMAIN) {
       try {
         const u = new URL(url);
         url = `wss://${PROXY_DOMAIN}/${u.hostname}${u.pathname}`;
-        console.log('[Proxy] WS:', url);
+        console.log('[Proxy] WS ->', url);
       } catch (e) {}
     }
     return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
@@ -51,11 +51,9 @@ let allFiles = [];
 let currentFilter = 'all';
 let offsetId = 0;
 let isLoadingMore = false;
+let allChats = [];
 
 const AVATAR_COLORS = ['#6ab3f3', '#51cf66', '#ff6b6b', '#fcc419', '#cc5de8', '#ff922b', '#22b8cf', '#845ef7'];
-const FILE_ICONS = {
-  image: '🖼️', video: '🎬', audio: '🎵', pdf: '📄', zip: '🗜️', text: '📝', default: '📦'
-};
 
 // ===== 初始化 =====
 async function initClient() {
@@ -73,8 +71,8 @@ async function initClient() {
   } catch { return false; }
 }
 
-// ===== 登录 =====
-window.sendCode = async function () {
+// ===== 登录流程 =====
+document.getElementById('send-code-btn').addEventListener('click', async () => {
   const phone = document.getElementById('phone').value.trim();
   if (!phone) return;
   const btn = document.getElementById('send-code-btn');
@@ -94,19 +92,18 @@ window.sendCode = async function () {
     status.textContent = '错误: ' + (e.message || e);
     btn.disabled = false; btn.textContent = '发送验证码';
   }
-};
+});
 
-window.signIn = async function () {
+document.getElementById('sign-in-btn').addEventListener('click', async () => {
   const code = document.getElementById('code').value.trim();
   const phone = document.getElementById('phone').value.trim();
   const status = document.getElementById('login-status');
   if (!code) return;
   try {
-    await client.invoke(
-      new (await import('telegram/tl/api')).Api.auth.SignIn({
-        phoneNumber: phone, phoneCodeHash, phoneCode: code,
-      })
-    );
+    const { Api } = await import('telegram/tl/api');
+    await client.invoke(new Api.auth.SignIn({
+      phoneNumber: phone, phoneCodeHash, phoneCode: code,
+    }));
     localStorage.setItem('tg_session', client.session.save());
     status.className = 'status success'; status.textContent = '登录成功！';
     showChats();
@@ -119,9 +116,9 @@ window.signIn = async function () {
       status.textContent = '错误: ' + (e.message || e);
     }
   }
-};
+});
 
-window.signInWithPassword = async function () {
+document.getElementById('password-btn').addEventListener('click', async () => {
   const password = document.getElementById('password').value;
   const status = document.getElementById('login-status');
   try {
@@ -133,15 +130,16 @@ window.signInWithPassword = async function () {
     status.className = 'status error';
     status.textContent = '错误: ' + (e.message || e);
   }
-};
+});
 
 // ===== 聊天列表 =====
-window.showChats = async function () {
+async function showChats() {
   document.getElementById('login-page').classList.add('hidden');
   document.getElementById('file-list-page').classList.add('hidden');
   document.getElementById('chat-list-page').classList.remove('hidden');
   document.getElementById('chat-list').innerHTML = '';
   document.getElementById('chat-status').textContent = '加载中...';
+  allChats = [];
   try {
     const dialogs = await client.getDialogs({ limit: 100 });
     const list = document.getElementById('chat-list');
@@ -152,53 +150,96 @@ window.showChats = async function () {
       const sub = dialog.message?.text || dialog.message?.message || '';
       const initial = name.charAt(0).toUpperCase();
       const color = AVATAR_COLORS[count % AVATAR_COLORS.length];
-      const item = document.createElement('div');
-      item.className = 'chat-item';
-      item.innerHTML = `
-        <div class="avatar" style="background:${color}">${escapeHtml(initial)}</div>
-        <div>
-          <div class="chat-name">${escapeHtml(name)}</div>
-          <div class="chat-sub">${escapeHtml(sub.slice(0, 50))}</div>
-        </div>
-      `;
-      item.onclick = () => showFiles(dialog);
-      list.appendChild(item);
+      const chatData = { dialog, entity, name, sub, initial, color };
+      allChats.push(chatData);
       count++;
     }
+    renderChatList(allChats);
     document.getElementById('chat-status').textContent = count > 0 ? `共 ${count} 个对话` : '没有对话';
+    // 异步加载头像
+    loadChatPhotos(allChats);
   } catch (e) {
     document.getElementById('chat-status').className = 'status error';
     document.getElementById('chat-status').textContent = '错误: ' + (e.message || e);
   }
-};
+}
 
-window.filterChats = function () {
-  const q = document.getElementById('chat-search').value.toLowerCase();
+function renderChatList(chats) {
+  const list = document.getElementById('chat-list');
+  list.innerHTML = '';
+  for (const chat of chats) {
+    const item = document.createElement('div');
+    item.className = 'chat-item';
+    item.dataset.name = chat.name.toLowerCase();
+    item.innerHTML = `
+      <div class="avatar" style="background:${chat.color}">${escapeHtml(chat.initial)}</div>
+      <div>
+        <div class="chat-name">${escapeHtml(chat.name)}</div>
+        <div class="chat-sub">${escapeHtml(chat.sub.slice(0, 50))}</div>
+      </div>
+    `;
+    item.onclick = () => showFiles(chat.dialog);
+    list.appendChild(item);
+  }
+}
+
+// 搜索
+document.getElementById('chat-search').addEventListener('input', (e) => {
+  const q = e.target.value.toLowerCase();
   const items = document.querySelectorAll('.chat-item');
   items.forEach(item => {
-    const name = item.querySelector('.chat-name')?.textContent.toLowerCase() || '';
+    const name = item.dataset.name || '';
     item.style.display = name.includes(q) ? '' : 'none';
   });
-};
+});
+
+// 异步加载聊天头像
+async function loadChatPhotos(chats) {
+  for (const chat of chats) {
+    try {
+      const buffer = await client.downloadProfilePhoto(chat.entity, { isBig: false });
+      if (buffer && buffer.length > 0) {
+        const blob = new Blob([buffer], { type: 'image/jpeg' });
+        const url = URL.createObjectURL(blob);
+        const item = document.querySelector(`.chat-item[data-name="${chat.name.toLowerCase()}"]`);
+        if (item) {
+          const avatar = item.querySelector('.avatar');
+          avatar.innerHTML = `<img src="${url}" alt="" />`;
+        }
+      }
+    } catch (e) {}
+  }
+}
 
 // ===== 文件列表 =====
-window.showFiles = async function (dialog) {
+async function showFiles(dialog) {
   currentChat = dialog;
   const entity = dialog.entity;
   const name = entity.title || entity.firstName || entity.username || 'Unknown';
-  const initial = name.charAt(0).toUpperCase();
   document.getElementById('chat-list-page').classList.add('hidden');
   document.getElementById('file-list-page').classList.remove('hidden');
   document.getElementById('chat-title').textContent = name;
-  document.getElementById('chat-avatar').textContent = initial;
-  document.getElementById('chat-avatar').style.background = AVATAR_COLORS[0];
+
+  // 设置聊天头像
+  const avatarEl = document.getElementById('chat-avatar');
+  avatarEl.innerHTML = name.charAt(0).toUpperCase();
+  avatarEl.style.background = AVATAR_COLORS[0];
+  try {
+    const buffer = await client.downloadProfilePhoto(entity, { isBig: false });
+    if (buffer && buffer.length > 0) {
+      const blob = new Blob([buffer], { type: 'image/jpeg' });
+      const url = URL.createObjectURL(blob);
+      avatarEl.innerHTML = `<img src="${url}" alt="" />`;
+    }
+  } catch (e) {}
+
   document.getElementById('file-list').innerHTML = '';
   document.getElementById('file-status').textContent = '加载文件中...';
   document.getElementById('load-more').classList.add('hidden');
   allFiles = []; offsetId = 0; currentFilter = 'all';
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.filter === 'all'));
   await loadFiles(entity);
-};
+}
 
 async function loadFiles(entity) {
   if (isLoadingMore) return;
@@ -216,8 +257,12 @@ async function loadFiles(entity) {
       return;
     }
     for (const msg of messages) {
+      console.log('msg', msg.id, 'media:', msg.media?.className || 'none');
       const fi = parseFileInfo(msg);
-      if (fi) allFiles.push(fi);
+      if (fi) {
+        allFiles.push(fi);
+        console.log('  -> file:', fi.name, fi.type);
+      }
       offsetId = msg.id;
     }
     renderFiles();
@@ -235,44 +280,108 @@ async function loadFiles(entity) {
   } catch (e) {
     document.getElementById('file-status').className = 'status error';
     document.getElementById('file-status').textContent = '错误: ' + (e.message || e);
+    console.error('loadFiles error:', e);
   } finally {
     isLoadingMore = false;
   }
 }
 
-window.loadMoreFiles = async function () {
-  if (!currentChat) return;
-  await loadFiles(currentChat.entity);
-};
-
-window.filterFiles = function (filter) {
-  currentFilter = filter;
-  document.querySelectorAll('.tab').forEach(t => {
-    t.classList.toggle('active', t.dataset.filter === filter);
+// 文件分类标签
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    currentFilter = tab.dataset.filter;
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t === tab));
+    renderFiles();
   });
-  renderFiles();
-};
+});
 
+// 加载更多
+document.getElementById('load-more-btn').addEventListener('click', () => {
+  if (currentChat) loadFiles(currentChat.entity);
+});
+
+// 返回
+document.getElementById('back-btn').addEventListener('click', () => {
+  document.getElementById('file-list-page').classList.add('hidden');
+  document.getElementById('chat-list-page').classList.remove('hidden');
+});
+
+// ===== 文件信息解析（恢复原始逻辑） =====
+function parseFileInfo(msg) {
+  // 检查是否有媒体
+  const media = msg.media;
+  if (!media) return null;
+
+  let doc = null;
+  let photo = null;
+
+  // 尝试多种方式获取 document
+  if (msg.document) {
+    doc = msg.document;
+  } else if (media.document) {
+    doc = media.document;
+  } else if (media.webpage && media.webpage.document) {
+    doc = media.webpage.document;
+  }
+
+  // 尝试多种方式获取 photo
+  if (msg.photo) {
+    photo = msg.photo;
+  } else if (media.photo) {
+    photo = media.photo;
+  } else if (media.webpage && media.webpage.photo) {
+    photo = media.webpage.photo;
+  }
+
+  if (!doc && !photo) return null;
+
+  let name = '', size = 0, type = 'default', mime = '';
+
+  if (photo) {
+    name = `photo_${msg.id}.jpg`;
+    type = 'photo'; mime = 'image/jpeg';
+  } else if (doc) {
+    const attrs = doc.attributes || [];
+    const fileNameAttr = attrs.find(a => a.fileName || a.classType === 'DocumentAttributeFilename');
+    name = fileNameAttr?.fileName || `file_${msg.id}`;
+    size = doc.size || 0;
+    mime = doc.mimeType || '';
+    if (mime.startsWith('image/')) type = 'photo';
+    else if (mime.startsWith('video/')) type = 'video';
+    else if (mime.startsWith('audio/')) type = 'audio';
+    else if (mime === 'application/pdf') type = 'doc';
+    else if (mime.includes('zip') || mime.includes('rar') || mime.includes('7z') || mime.includes('tar')) type = 'doc';
+    else type = 'doc';
+  }
+
+  return { msg, name, size, type, mime, sizeText: formatSize(size) };
+}
+
+// ===== 渲染文件列表 =====
 function renderFiles() {
   const list = document.getElementById('file-list');
   list.innerHTML = '';
   const filtered = currentFilter === 'all'
     ? allFiles
     : allFiles.filter(f => f.type === currentFilter);
+
   for (const fi of filtered) {
     const card = document.createElement('div');
     card.className = 'file-card';
     const showPreview = ['photo', 'video', 'audio'].includes(fi.type);
+    const icon = fi.type === 'photo' ? '🖼️'
+      : fi.type === 'video' ? '🎬'
+      : fi.type === 'audio' ? '🎵'
+      : fi.type === 'doc' ? '📄'
+      : '📦';
+
     let thumbHtml = '';
-    if (fi.type === 'photo') {
-      thumbHtml = `<div class="file-thumb" data-action="preview"><div class="placeholder">${FILE_ICONS.image}</div></div>`;
-    } else if (fi.type === 'video') {
-      thumbHtml = `<div class="file-thumb" data-action="preview"><div class="placeholder">${FILE_ICONS.video}</div></div>`;
-    } else if (fi.type === 'audio') {
-      thumbHtml = `<div class="file-thumb" data-action="preview"><div class="placeholder">${FILE_ICONS.audio}</div></div>`;
+    if (showPreview) {
+      thumbHtml = `<div class="file-thumb${fi.type === 'video' ? ' video-badge' : ''}"><div class="placeholder">${icon}</div></div>`;
     } else {
-      thumbHtml = `<div class="file-thumb"><div class="placeholder">${fi.icon}</div></div>`;
+      thumbHtml = `<div class="file-thumb"><div class="placeholder">${icon}</div></div>`;
     }
+
     card.innerHTML = `
       ${thumbHtml}
       <div class="file-info">
@@ -284,40 +393,16 @@ function renderFiles() {
         </div>
       </div>
     `;
-    const thumb = card.querySelector('.file-thumb[data-action="preview"]');
-    if (thumb) thumb.onclick = () => previewFile(fi);
-    const previewBtn = card.querySelector('.btn-pre');
-    if (previewBtn) previewBtn.onclick = () => previewFile(fi);
-    card.querySelector('.btn-dl').onclick = () => downloadFile(fi);
+
+    const thumb = card.querySelector('.file-thumb');
+    if (showPreview && thumb) {
+      thumb.addEventListener('click', () => previewFile(fi));
+    }
+    const preBtn = card.querySelector('.btn-pre');
+    if (preBtn) preBtn.addEventListener('click', () => previewFile(fi));
+    card.querySelector('.btn-dl').addEventListener('click', () => downloadFile(fi));
     list.appendChild(card);
   }
-}
-
-// ===== 文件信息解析 =====
-function parseFileInfo(msg) {
-  const doc = msg.document || msg.media?.document;
-  const photo = msg.photo || msg.media?.photo;
-  if (!doc && !photo) return null;
-
-  let name = '', size = 0, type = 'default', mime = '', icon = FILE_ICONS.default;
-
-  if (photo) {
-    name = `photo_${msg.id}.jpg`;
-    type = 'photo'; mime = 'image/jpeg'; icon = FILE_ICONS.image;
-  } else if (doc) {
-    const attr = doc.attributes?.find(a => a.fileName);
-    name = attr?.fileName || `file_${msg.id}`;
-    size = doc.size || 0;
-    mime = doc.mimeType || '';
-    if (mime.startsWith('image/')) { type = 'photo'; icon = FILE_ICONS.image; }
-    else if (mime.startsWith('video/')) { type = 'video'; icon = FILE_ICONS.video; }
-    else if (mime.startsWith('audio/')) { type = 'audio'; icon = FILE_ICONS.audio; }
-    else if (mime === 'application/pdf') { type = 'pdf'; icon = FILE_ICONS.pdf; }
-    else if (mime.includes('zip') || mime.includes('rar') || mime.includes('7z')) { type = 'zip'; icon = FILE_ICONS.zip; }
-    else if (mime.startsWith('text/')) { type = 'text'; icon = FILE_ICONS.text; }
-  }
-
-  return { msg, name, size, type, mime, icon, sizeText: formatSize(size) };
 }
 
 // ===== 在线预览 =====
@@ -337,24 +422,22 @@ async function previewFile(fi) {
       content.innerHTML = `<video src="${url}" controls autoplay style="background:#000"></video>`;
     } else if (fi.type === 'audio') {
       content.innerHTML = `<audio src="${url}" controls autoplay style="margin-top:20vh"></audio>`;
-    } else {
-      content.innerHTML = `<p style="color:#999">不支持预览此文件类型</p>`;
-      URL.revokeObjectURL(url);
     }
   } catch (e) {
     content.innerHTML = `<p style="color:#ff6b6b">加载失败: ${escapeHtml(e.message || String(e))}</p>`;
+    console.error('preview error:', e);
   }
 }
 
-window.closePreview = function (event) {
-  if (event && event.target.id !== 'preview-overlay' && event.target.className !== 'preview-close' && event.target.textContent !== '×') return;
-  const overlay = document.getElementById('preview-overlay');
+// 关闭预览
+document.getElementById('preview-overlay').addEventListener('click', (e) => {
+  if (e.target.id !== 'preview-overlay' && !e.target.classList.contains('preview-close') && e.target.textContent !== '×') return;
   const content = document.getElementById('preview-content');
   const media = content.querySelector('img, video, audio');
   if (media && media.src) URL.revokeObjectURL(media.src);
   content.innerHTML = '';
-  overlay.classList.add('hidden');
-};
+  document.getElementById('preview-overlay').classList.add('hidden');
+});
 
 // ===== 下载 =====
 async function downloadFile(fi) {
