@@ -2,144 +2,305 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Telegram Files</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Telegram Web</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-      background: #0e1621;
-      background-image: radial-gradient(circle at 20% 30%, #1a2a3a 0%, #0e1621 50%),
-                        radial-gradient(circle at 80% 70%, #1a2230 0%, #0e1621 50%);
-      color: #e7edf3;
-      min-height: 100vh;
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    :root {
+      --tg-blue: #3390ec;
+      --tg-blue-hover: #2b7ed4;
+      --bg-main: #0e1621;
+      --bg-panel: #17212b;
+      --bg-hover: #2b5278;
+      --bg-message-in: #182533;
+      --bg-message-out: #2b5278;
+      --text-primary: #ffffff;
+      --text-secondary: #708499;
+      --text-link: #6ab3f3;
+      --border: #0f1c2e;
     }
-    .container { max-width: 1000px; margin: 0 auto; padding: 16px; }
-    h1 { font-size: 22px; margin-bottom: 16px; color: #6ab3f3; display: flex; align-items: center; gap: 8px; }
-    h1::before { content: '📁'; font-size: 24px; }
-    .card { background: #17212b; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
-    input, button { font-size: 15px; padding: 10px 14px; border-radius: 8px; border: none; outline: none; }
-    input { background: #0e1621; color: #fff; width: 100%; border: 1px solid #2b5278; transition: border-color 0.2s; }
-    input:focus { border-color: #6ab3f3; box-shadow: 0 0 0 2px rgba(106,179,243,0.15); }
-    button { background: #6ab3f3; color: #000; cursor: pointer; font-weight: 600; width: 100%; transition: background 0.2s; }
-    button:hover { background: #4a9fd8; }
-    button:disabled { background: #2b5278; color: #666; cursor: not-allowed; }
-    .row { display: flex; gap: 8px; margin-bottom: 8px; }
-    .row input { flex: 1; }
-    .row button { width: auto; min-width: 100px; }
-    .status { color: #999; font-size: 14px; margin-top: 8px; }
-    .error { color: #ff6b6b; }
-    .success { color: #51cf66; }
-    .chat-item { display: flex; align-items: center; padding: 12px; border-radius: 10px; cursor: pointer; gap: 12px; transition: background 0.15s; }
-    .chat-item:hover { background: #0e1621; }
-    .chat-name { font-weight: 600; font-size: 15px; }
-    .chat-sub { font-size: 13px; color: #888; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 300px; }
-    .back { color: #6ab3f3; cursor: pointer; margin-bottom: 12px; font-size: 14px; display: inline-flex; align-items: center; gap: 4px; }
-    .back:hover { text-decoration: underline; }
-    .hidden { display: none !important; }
-    .avatar { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 18px; flex-shrink: 0; color: #fff; overflow: hidden; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg-main);
+      color: var(--text-primary);
+      font-size: 15px;
+    }
+
+    /* ===== 登录页 ===== */
+    #login-view {
+      height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: var(--bg-main);
+    }
+    .login-card { background: var(--bg-panel); border-radius: 16px; padding: 32px; width: 360px; max-width: 90vw; }
+    .login-card h1 { text-align: center; color: var(--tg-blue); margin-bottom: 8px; font-size: 24px; }
+    .login-card .subtitle { text-align: center; color: var(--text-secondary); margin-bottom: 24px; font-size: 14px; }
+    .login-card input {
+      background: var(--bg-main); color: #fff; width: 100%;
+      border: 1px solid #2b5278; border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; font-size: 15px;
+    }
+    .login-card input:focus { border-color: var(--tg-blue); }
+    .login-card button {
+      background: var(--tg-blue); color: #fff; width: 100%; border: none;
+      border-radius: 10px; padding: 12px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 4px;
+    }
+    .login-card button:hover { background: var(--tg-blue-hover); }
+    .login-card button:disabled { opacity: 0.5; cursor: default; }
+    .login-status { text-align: center; margin-top: 12px; font-size: 14px; color: var(--text-secondary); }
+    .login-status.error { color: #ff6b6b; }
+    .login-status.success { color: #51cf66; }
+
+    /* ===== 主布局 ===== */
+    #app-view { display: none; height: 100vh; }
+    #app-view.active { display: flex; }
+
+    /* 左侧聊天列表 */
+    .sidebar {
+      width: 360px; min-width: 360px; background: var(--bg-panel);
+      border-right: 1px solid var(--border); display: flex; flex-direction: column; height: 100vh;
+    }
+    .sidebar-header {
+      padding: 8px 12px; display: flex; align-items: center; gap: 8px;
+      border-bottom: 1px solid var(--border); height: 56px; flex-shrink: 0;
+    }
+    .sidebar-header .menu-btn { font-size: 20px; cursor: pointer; padding: 8px; border-radius: 50%; background: none; border: none; color: var(--text-secondary); }
+    .sidebar-header .menu-btn:hover { background: var(--bg-hover); }
+    .search-wrap { flex: 1; position: relative; }
+    .search-wrap input {
+      background: var(--bg-main); border: none; border-radius: 22px; padding: 8px 16px 8px 40px;
+      width: 100%; color: #fff; font-size: 14px;
+    }
+    .search-wrap::before { content: '🔍'; position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 14px; opacity: 0.5; }
+
+    .chat-list { flex: 1; overflow-y: auto; }
+    .chat-list::-webkit-scrollbar { width: 6px; }
+    .chat-list::-webkit-scrollbar-thumb { background: #2b5278; border-radius: 3px; }
+
+    .chat-item {
+      display: flex; align-items: center; padding: 10px 12px; gap: 10px; cursor: pointer; transition: background 0.15s;
+    }
+    .chat-item:hover { background: rgba(255,255,255,0.04); }
+    .chat-item.active { background: var(--bg-hover); }
+    .avatar {
+      width: 54px; height: 54px; border-radius: 50%; flex-shrink: 0; overflow: hidden;
+      display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 20px; color: #fff;
+    }
     .avatar img { width: 100%; height: 100%; object-fit: cover; }
-    .file-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
-    .file-card { background: #0e1621; border-radius: 10px; overflow: hidden; transition: transform 0.15s; }
-    .file-card:hover { transform: translateY(-1px); }
-    .file-thumb { width: 100%; height: 180px; background: #17212b; display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: pointer; }
-    .file-thumb img { width: 100%; height: 100%; object-fit: cover; }
-    .file-thumb .placeholder { font-size: 48px; opacity: 0.4; }
-    .file-info { padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .file-name { font-size: 14px; word-break: break-all; flex: 1; }
-    .file-meta { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
-    .file-size { font-size: 12px; color: #888; }
-    .file-btn { padding: 6px 14px; border-radius: 6px; font-size: 13px; white-space: nowrap; cursor: pointer; border: none; font-weight: 600; }
-    .btn-dl { background: #6ab3f3; color: #000; }
-    .btn-dl:hover { background: #4a9fd8; }
-    .btn-pre { background: #2b5278; color: #e7edf3; }
-    .btn-pre:hover { background: #316294; }
+    .chat-info { flex: 1; min-width: 0; }
+    .chat-info .name { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .chat-info .preview { font-size: 14px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+    .chat-info .preview .you { color: var(--text-link); }
+
+    /* 右侧聊天窗口 */
+    .chat-window { flex: 1; display: flex; flex-direction: column; height: 100vh; position: relative; }
+    .chat-window.no-chat { align-items: center; justify-content: center; }
+    .chat-window.no-chat .placeholder { text-align: center; color: var(--text-secondary); }
+    .chat-window.no-chat .placeholder .icon { font-size: 56px; margin-bottom: 12px; }
+
+    .chat-header {
+      padding: 8px 16px; display: flex; align-items: center; gap: 12px;
+      background: var(--bg-panel); border-bottom: 1px solid var(--border); height: 56px; flex-shrink: 0; z-index: 2;
+    }
+    .chat-header .back-btn { display: none; font-size: 20px; cursor: pointer; color: var(--text-secondary); background: none; border: none; }
+    .chat-header .avatar { width: 42px; height: 42px; font-size: 16px; }
+    .chat-header .info { flex: 1; }
+    .chat-header .info .name { font-size: 17px; font-weight: 500; }
+    .chat-header .info .status { font-size: 13px; color: var(--text-secondary); margin-top: 1px; }
+    .chat-header .actions { display: flex; gap: 8px; }
+    .chat-header .icon-btn { font-size: 20px; cursor: pointer; color: var(--text-secondary); background: none; border: none; padding: 8px; border-radius: 50%; }
+    .chat-header .icon-btn:hover { background: var(--bg-hover); }
+
+    /* 消息区域 */
+    .messages-wrap { flex: 1; overflow: hidden; position: relative; }
+    .messages-bg { position: absolute; inset: 0; background-size: cover; background-position: center; opacity: 0.06; }
+    .messages { position: relative; height: 100%; overflow-y: auto; padding: 10px 16px; max-width: 800px; margin: 0 auto; }
+    .messages::-webkit-scrollbar { width: 6px; }
+    .messages::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+
+    .date-sep { text-align: center; margin: 16px 0 8px; }
+    .date-sep span { background: rgba(0,0,0,0.3); padding: 4px 12px; border-radius: 12px; font-size: 13px; color: #fff; }
+
+    .msg { display: flex; margin-bottom: 4px; max-width: 70%; }
+    .msg.out { margin-left: auto; flex-direction: row-reverse; }
+    .msg.in { margin-right: auto; }
+    .msg-bubble {
+      border-radius: 12px; padding: 6px 10px; position: relative; word-break: break-word; font-size: 15px; line-height: 1.4;
+    }
+    .msg.in .msg-bubble { background: var(--bg-message-in); }
+    .msg.out .msg-bubble { background: var(--bg-message-out); }
+    .msg-bubble .sender { font-size: 13px; color: var(--tg-blue); font-weight: 600; margin-bottom: 2px; }
+    .msg-bubble .text { white-space: pre-wrap; }
+    .msg-bubble .meta { font-size: 11px; color: var(--text-secondary); text-align: right; margin-top: 2px; }
+    .msg.out .msg-bubble .meta { color: rgba(255,255,255,0.6); }
+
+    /* 消息内媒体 */
+    .msg-media { border-radius: 8px; overflow: hidden; margin-bottom: 4px; max-width: 360px; }
+    .msg-media img { width: 100%; display: block; cursor: pointer; }
+    .msg-media video { width: 100%; display: block; max-height: 400px; }
+    .msg-media audio { width: 100%; }
+    .msg-media .file-card {
+      display: flex; align-items: center; gap: 10px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 8px;
+    }
+    .msg-media .file-icon { font-size: 32px; }
+    .msg-media .file-info { flex: 1; min-width: 0; }
+    .msg-media .file-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .msg-media .file-size { font-size: 12px; color: var(--text-secondary); }
+    .msg-media .file-dl-btn { background: var(--tg-blue); color: #fff; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+
+    /* 输入栏 */
+    .input-bar {
+      padding: 8px 16px; display: flex; align-items: flex-end; gap: 8px;
+      background: var(--bg-panel); border-top: 1px solid var(--border); flex-shrink: 0;
+    }
+    .input-bar .attach-btn { font-size: 22px; cursor: pointer; color: var(--text-secondary); background: none; border: none; padding: 8px; }
+    .input-bar .attach-btn:hover { color: var(--tg-blue); }
+    .input-bar textarea {
+      flex: 1; background: var(--bg-main); border: none; border-radius: 18px; padding: 10px 16px;
+      color: #fff; font-size: 15px; resize: none; max-height: 120px; min-height: 40px; line-height: 1.4;
+      font-family: inherit;
+    }
+    .input-bar .send-btn {
+      background: var(--tg-blue); color: #fff; border: none; border-radius: 50%;
+      width: 44px; height: 44px; font-size: 18px; cursor: pointer; flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .input-bar .send-btn:hover { background: var(--tg-blue-hover); }
+    .input-bar .send-btn:disabled { opacity: 0.3; cursor: default; }
+    #file-input { display: none; }
+
+    /* 设置面板 */
+    .settings-panel {
+      position: fixed; top: 0; left: 0; width: 360px; height: 100vh; background: var(--bg-panel);
+      z-index: 100; transform: translateX(-100%); transition: transform 0.3s; overflow-y: auto;
+    }
+    .settings-panel.open { transform: translateX(0); }
+    .settings-panel .header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
+    .settings-panel .header .close { cursor: pointer; font-size: 20px; color: var(--text-secondary); background: none; border: none; }
+    .settings-panel .section { padding: 16px; border-bottom: 1px solid var(--border); }
+    .settings-panel .section h3 { font-size: 15px; color: var(--text-secondary); margin-bottom: 12px; }
+    .settings-panel .bg-option { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 8px; cursor: pointer; }
+    .settings-panel .bg-option:hover { background: var(--bg-hover); }
+    .settings-panel .bg-preview { width: 48px; height: 48px; border-radius: 8px; background: var(--bg-main); flex-shrink: 0; }
+    .settings-panel .bg-preview img { width: 100%; height: 100%; border-radius: 8px; object-fit: cover; }
+    .settings-panel input[type="file"] { width: 100%; }
+
+    /* 图片预览弹窗 */
     .preview-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px; }
-    .preview-content { max-width: 90vw; max-height: 90vh; border-radius: 12px; overflow: hidden; }
-    .preview-content img, .preview-content video, .preview-content audio { max-width: 90vw; max-height: 90vh; }
+    .preview-overlay img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
     .preview-close { position: fixed; top: 16px; right: 20px; color: #fff; font-size: 32px; cursor: pointer; z-index: 10000; background: rgba(255,255,255,0.1); width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
-    .preview-close:hover { background: rgba(255,255,255,0.2); }
-    .loading-spinner { width: 32px; height: 32px; border: 3px solid #2b5278; border-top-color: #6ab3f3; border-radius: 50%; animation: spin 0.8s linear infinite; }
+
+    .loading-spinner { width: 32px; height: 32px; border: 3px solid #2b5278; border-top-color: var(--tg-blue); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 20px auto; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .file-type-icon { font-size: 28px; }
-    .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
-    .tab { padding: 8px 16px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: 14px; color: #888; border-bottom: 2px solid transparent; transition: all 0.15s; }
-    .tab.active { color: #6ab3f3; border-bottom-color: #6ab3f3; }
-    .tab:hover { color: #e7edf3; }
-    .search-box { margin-bottom: 12px; }
-    .search-box input { background: #0e1621; border: 1px solid #2b5278; border-radius: 8px; padding: 8px 14px; }
-    .chat-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-    .chat-header .avatar { width: 40px; height: 40px; font-size: 16px; }
-    .load-more { text-align: center; padding: 16px; }
-    .load-more button { width: auto; min-width: 140px; }
-    .empty-state { text-align: center; padding: 40px 20px; color: #666; }
-    .empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.3; }
-    .video-badge { position: relative; }
-    .video-badge::after { content: '▶'; position: absolute; bottom: 8px; right: 8px; background: rgba(0,0,0,0.7); color: #fff; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; }
+    .hidden { display: none !important; }
+
+    /* 响应式 */
+    @media (max-width: 768px) {
+      .sidebar { width: 100%; min-width: 0; }
+      .sidebar.hidden-mobile { display: none; }
+      .chat-window { display: none; }
+      .chat-window.active-mobile { display: flex; }
+      .chat-header .back-btn { display: block; }
+      .msg { max-width: 85%; }
+    }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Telegram Files</h1>
+  <!-- 登录页 -->
+  <div id="login-view">
+    <div class="login-card">
+      <h1>Telegram</h1>
+      <div class="subtitle">请登录你的账号</div>
+      <input id="phone" placeholder="+8613800138000" />
+      <div id="code-row" class="hidden">
+        <input id="code" placeholder="验证码" style="margin-top: 10px;" />
+      </div>
+      <div id="password-row" class="hidden">
+        <input id="password" type="password" placeholder="两步验证密码" style="margin-top: 10px;" />
+      </div>
+      <button id="main-btn">发送验证码</button>
+      <div id="login-status" class="login-status"></div>
+    </div>
+  </div>
 
-    <!-- 登录页 -->
-    <div id="login-page" class="card">
-      <div class="row">
-        <input id="phone" placeholder="+8613800138000" />
-        <button id="send-code-btn">发送验证码</button>
+  <!-- 主界面 -->
+  <div id="app-view">
+    <!-- 左侧 -->
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <button class="menu-btn" id="menu-btn">☰</button>
+        <div class="search-wrap">
+          <input id="search-input" placeholder="搜索" />
+        </div>
       </div>
-      <div id="code-row" class="row hidden">
-        <input id="code" placeholder="验证码" />
-        <button id="sign-in-btn">登录</button>
-      </div>
-      <div id="password-row" class="row hidden">
-        <input id="password" type="password" placeholder="两步验证密码" />
-        <button id="password-btn">确认</button>
-      </div>
-      <div id="login-status" class="status"></div>
+      <div class="chat-list" id="chat-list"></div>
     </div>
 
-    <!-- 聊天列表 -->
-    <div id="chat-list-page" class="hidden">
-      <div class="search-box">
-        <input id="chat-search" placeholder="搜索频道..." />
+    <!-- 右侧聊天 -->
+    <div class="chat-window no-chat" id="chat-window">
+      <div class="placeholder">
+        <div class="icon">💬</div>
+        <div>选择一个对话开始聊天</div>
       </div>
-      <div class="card">
-        <div id="chat-list"></div>
-        <div id="chat-status" class="status"></div>
+      <div class="chat-header hidden" id="chat-header">
+        <button class="back-btn" id="back-btn">←</button>
+        <div class="avatar" id="chat-avatar"></div>
+        <div class="info">
+          <div class="name" id="chat-name"></div>
+          <div class="status" id="chat-status"></div>
+        </div>
+        <div class="actions">
+          <button class="icon-btn" id="search-in-chat">🔍</button>
+        </div>
       </div>
-    </div>
-
-    <!-- 文件列表 -->
-    <div id="file-list-page" class="hidden">
-      <div class="back" id="back-btn">← 返回</div>
-      <div class="card">
-        <div class="chat-header">
-          <div id="chat-avatar" class="avatar"></div>
-          <h2 id="chat-title" style="font-size:18px;"></h2>
-        </div>
-        <div class="tabs">
-          <div class="tab active" data-filter="all">全部</div>
-          <div class="tab" data-filter="photo">图片</div>
-          <div class="tab" data-filter="video">视频</div>
-          <div class="tab" data-filter="audio">音频</div>
-          <div class="tab" data-filter="doc">文档</div>
-        </div>
-        <div id="file-list" class="file-grid"></div>
-        <div id="file-status" class="status"></div>
-        <div id="load-more" class="load-more hidden">
-          <button id="load-more-btn">加载更多</button>
-        </div>
+      <div class="messages-wrap hidden" id="messages-wrap">
+        <div class="messages-bg" id="messages-bg"></div>
+        <div class="messages" id="messages"></div>
+      </div>
+      <div class="input-bar hidden" id="input-bar">
+        <button class="attach-btn" id="attach-btn">📎</button>
+        <input type="file" id="file-input" multiple />
+        <textarea id="msg-input" placeholder="输入消息..." rows="1"></textarea>
+        <button class="send-btn" id="send-btn">➤</button>
       </div>
     </div>
   </div>
 
-  <!-- 预览弹窗 -->
-  <div id="preview-overlay" class="preview-overlay hidden">
-    <div class="preview-close" id="preview-close">×</div>
-    <div id="preview-content" class="preview-content">
-      <div class="loading-spinner"></div>
+  <!-- 设置面板 -->
+  <div class="settings-panel" id="settings-panel">
+    <div class="header">
+      <button class="close" id="settings-close">←</button>
+      <span>设置</span>
     </div>
+    <div class="section">
+      <h3>聊天背景</h3>
+      <div class="bg-option" data-bg="default">
+        <div class="bg-preview" style="background: #0e1621;"></div>
+        <span>默认深色</span>
+      </div>
+      <div class="bg-option" data-bg="telegram">
+        <div class="bg-preview" style="background: linear-gradient(135deg, #2b5278, #0e1621);"></div>
+        <span>Telegram 风格</span>
+      </div>
+      <div class="bg-option" data-bg="custom">
+        <div class="bg-preview" id="custom-bg-preview" style="background: #2b5278; display: flex; align-items: center; justify-content: center; font-size: 20px;">＋</div>
+        <span>自定义图片</span>
+      </div>
+      <input type="file" id="bg-file-input" accept="image/*" style="margin-top: 8px;" />
+      <div style="margin-top: 8px;">
+        <label style="font-size: 13px; color: var(--text-secondary);">背景透明度</label>
+        <input type="range" id="bg-opacity" min="5" max="40" value="8" style="width: 100%;" />
+      </div>
+    </div>
+    <div class="section">
+      <h3>账号</h3>
+      <button id="logout-btn" style="background: #ff6b6b; color: #fff; border: none; border-radius: 8px; padding: 10px 16px; cursor: pointer; width: 100%; font-size: 14px;">退出登录</button>
+    </div>
+  </div>
+
+  <!-- 图片预览 -->
+  <div class="preview-overlay hidden" id="preview-overlay">
+    <div class="preview-close" id="preview-close">×</div>
+    <img id="preview-img" src="" alt="" />
   </div>
 
   <script type="module" src="/src/main.js"></script>
