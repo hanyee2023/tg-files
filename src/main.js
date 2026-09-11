@@ -49,6 +49,18 @@ const LOAD_LIMIT = 100;
 // ===== DOM 引用 =====
 const $ = id => document.getElementById(id);
 
+// 全局错误捕获
+window.addEventListener('error', (e) => {
+  console.error('Global error:', e.error || e.message);
+  const statusEl = $('login-status');
+  if (statusEl && !statusEl.classList.contains('error')) {
+    statusEl.className = 'login-status error';
+    statusEl.textContent = '加载错误: ' + (e.error?.message || e.message || '未知错误');
+  }
+});
+
+console.log('[Boot] API_ID:', API_ID ? '✓' : '✗', 'PROXY:', PROXY_DOMAIN || '(未设置)');
+
 // ===== 启动（先显示 splash，再判断跳转） =====
 let splashTimer = null;
 
@@ -99,6 +111,13 @@ function showLoginPage() {
   clearTimeout(splashTimer);
   $('splash-view').classList.remove('show');
   $('login-view').style.display = 'flex';
+  // 显示代理状态
+  const proxyStatus = PROXY_DOMAIN
+    ? `<div style="font-size:12px;color:#51cf66;margin-top:8px;">代理已启用: ${PROXY_DOMAIN}</div>`
+    : `<div style="font-size:12px;color:#ff6b6b;margin-top:8px;">警告: 未配置代理</div>`;
+  if ($('login-status').textContent === '请输入手机号登录') {
+    $('login-status').innerHTML = '请输入手机号登录' + proxyStatus;
+  }
 }
 
 function hideSplash() {
@@ -106,20 +125,40 @@ function hideSplash() {
   $('splash-view').classList.remove('show');
 }
 
+// ===== 带超时的连接辅助函数 =====
+async function connectWithTimeout(c, timeoutMs = 20000) {
+  let done = false;
+  const timeoutP = new Promise((_, reject) => {
+    setTimeout(() => {
+      if (!done) reject(new Error('连接超时，请检查网络或代理'));
+    }, timeoutMs);
+  });
+  const connectP = c.connect();
+  const result = await Promise.race([connectP, timeoutP]);
+  done = true;
+  return result;
+}
+
 // ===== 登录流程 =====
 $('main-btn').addEventListener('click', async () => {
   if (loginStep === 'phone') {
     const phone = $('phone').value.trim();
     if (!phone) return;
-    $('main-btn').disabled = true; $('main-btn').textContent = '连接中...';
-    $('login-status').textContent = '';
+    $('main-btn').disabled = true;
+    $('main-btn').textContent = '连接中...';
+    $('login-status').className = 'login-status';
+    $('login-status').textContent = '正在连接 Telegram...';
     try {
       if (!client) {
         client = new TelegramClient(new StringSession(''), API_ID, API_HASH, {
-          connectionRetries: 3, retryDelay: 2000,
+          connectionRetries: 1,
+          retryDelay: 1000,
+          autoReconnect: false,
         });
-        await client.connect();
+        $('login-status').textContent = '正在通过代理连接...';
+        await connectWithTimeout(client, 20000);
       }
+      $('login-status').textContent = '正在发送验证码...';
       const r = await client.sendCode({ apiId: API_ID, apiHash: API_HASH }, phone);
       phoneCodeHash = r.phoneCodeHash;
       $('code-row').classList.remove('hidden');
@@ -129,15 +168,21 @@ $('main-btn').addEventListener('click', async () => {
       $('login-status').className = 'login-status success';
       $('login-status').textContent = '验证码已发送到 Telegram';
     } catch (e) {
+      console.error('Login error:', e);
       $('login-status').className = 'login-status error';
       $('login-status').textContent = e.message || String(e);
-      $('main-btn').disabled = false; $('main-btn').textContent = '发送验证码';
+      $('main-btn').disabled = false;
+      $('main-btn').textContent = '重新发送';
+      // 重置 client 以便重试
+      try { if (client) { await client.disconnect(); } } catch(_) {}
+      client = null;
     }
   } else if (loginStep === 'code') {
     const code = $('code').value.trim();
     const phone = $('phone').value.trim();
     if (!code) return;
     $('main-btn').disabled = true;
+    $('main-btn').textContent = '验证中...';
     try {
       await client.invoke(new Api.auth.SignIn({ phoneNumber: phone, phoneCodeHash, phoneCode: code }));
       me = await client.getMe();
@@ -160,6 +205,7 @@ $('main-btn').addEventListener('click', async () => {
     const pwd = $('password').value;
     if (!pwd) return;
     $('main-btn').disabled = true;
+    $('main-btn').textContent = '验证中...';
     try {
       await client.signInWithPassword({ password: pwd });
       me = await client.getMe();
