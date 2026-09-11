@@ -411,9 +411,14 @@
         if (typeof url === 'string' && shouldRewrite(url)) {
           try {
             var u = new URL(url);
-            var newUrl = 'wss://' + PROXY + '/' + u.hostname + u.pathname + u.search;
+            // 去掉端口号：vesta.web.telegram.org:443 → vesta.web.telegram.org
+            var cleanHost = u.hostname;
+            var newUrl = 'wss://' + PROXY + '/' + cleanHost + u.pathname + u.search;
             console.log('[Proxy] WS rewrite:', url, '->', newUrl);
-            url = newUrl;
+            // 关键：不传 protocols 参数！
+            // Cloudflare Workers WebSocketPair 不支持协议协商
+            // GramJS 传的 'binary' 会导致握手失败
+            return new OrigWS(newUrl);
           } catch(e) {}
         }
         return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
