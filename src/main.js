@@ -1,8 +1,9 @@
-// ⚠️ proxy.js 必须第一个 import，确保 GramJS 加载前 patch 好 WebSocket
+// ⚠️ proxy.js 必须第一个 import，确保 GramJS 加载前 patch 好 WebSocket 和 fetch
 import './proxy.js';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram/tl/api';
+import { HTTPConnection } from 'telegram/network';
 
 // ===== 配置 =====
 const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
@@ -79,6 +80,7 @@ async function boot() {
   setSplashStatus('正在连接 Telegram...');
   try {
     client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, {
+      connection: HTTPConnection,
       connectionRetries: 2, retryDelay: 2000, autoReconnect: true,
     });
     await client.connect();
@@ -151,6 +153,7 @@ $('main-btn').addEventListener('click', async () => {
         client = null;
       }
       client = new TelegramClient(new StringSession(''), API_ID, API_HASH, {
+        connection: HTTPConnection,
         connectionRetries: 1,
         retryDelay: 1000,
         autoReconnect: false,
