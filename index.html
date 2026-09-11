@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Telegram Web</title>
+  <title>TG Files - 网盘</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     :root {
@@ -18,31 +18,43 @@
       --text-secondary: #708499;
       --text-link: #6ab3f3;
       --border: #0f1c2e;
+      --shadow: 0 2px 8px rgba(0,0,0,0.3);
     }
     html, body { height: 100%; overflow: hidden; }
     body {
-      font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       background: var(--bg-main);
       color: var(--text-primary);
       font-size: 15px;
+      -webkit-font-smoothing: antialiased;
     }
+
+    /* ===== SVG 图标通用样式 ===== */
+    .icon { width: 24px; height: 24px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+    .icon-sm { width: 20px; height: 20px; }
+    .icon-lg { width: 28px; height: 28px; }
 
     /* ===== 登录页 ===== */
     #login-view {
       height: 100vh; display: flex; align-items: center; justify-content: center;
       background: var(--bg-main);
+      transition: opacity 0.2s;
     }
-    .login-card { background: var(--bg-panel); border-radius: 16px; padding: 32px; width: 360px; max-width: 90vw; }
-    .login-card h1 { text-align: center; color: var(--tg-blue); margin-bottom: 8px; font-size: 24px; }
+    #login-view.fading { opacity: 0; }
+    .login-card { background: var(--bg-panel); border-radius: 16px; padding: 32px; width: 360px; max-width: 90vw; box-shadow: var(--shadow); }
+    .login-card .logo { text-align: center; margin-bottom: 16px; color: var(--tg-blue); }
+    .login-card h1 { text-align: center; color: var(--tg-blue); margin-bottom: 8px; font-size: 24px; font-weight: 600; }
     .login-card .subtitle { text-align: center; color: var(--text-secondary); margin-bottom: 24px; font-size: 14px; }
     .login-card input {
       background: var(--bg-main); color: #fff; width: 100%;
       border: 1px solid #2b5278; border-radius: 10px; padding: 12px 16px; margin-bottom: 10px; font-size: 15px;
+      outline: none; transition: border-color 0.2s;
     }
     .login-card input:focus { border-color: var(--tg-blue); }
     .login-card button {
       background: var(--tg-blue); color: #fff; width: 100%; border: none;
       border-radius: 10px; padding: 12px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 4px;
+      transition: background 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;
     }
     .login-card button:hover { background: var(--tg-blue-hover); }
     .login-card button:disabled { opacity: 0.5; cursor: default; }
@@ -50,9 +62,41 @@
     .login-status.error { color: #ff6b6b; }
     .login-status.success { color: #51cf66; }
 
+    /* 启动加载 */
+    .splash {
+      position: fixed; inset: 0; background: var(--bg-main);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 9999; transition: opacity 0.3s;
+    }
+    .splash.hidden { opacity: 0; pointer-events: none; }
+    .splash .icon { color: var(--tg-blue); width: 64px; height: 64px; margin-bottom: 16px; }
+    .splash .text { color: var(--text-secondary); font-size: 14px; }
+    .splash .loading-bar { width: 120px; height: 3px; background: #2b5278; border-radius: 2px; margin-top: 16px; overflow: hidden; }
+    .splash .loading-bar::after {
+      content: ''; display: block; width: 40%; height: 100%; background: var(--tg-blue);
+      border-radius: 2px; animation: splash-loading 1.2s ease-in-out infinite;
+    }
+    @keyframes splash-loading {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(300%); }
+    }
+
     /* ===== 主布局 ===== */
     #app-view { display: none; height: 100vh; }
     #app-view.active { display: flex; }
+
+    /* 模式切换 Tab */
+    .mode-tabs {
+      display: flex; padding: 4px; background: var(--bg-main); border-radius: 8px;
+      margin: 8px 12px;
+    }
+    .mode-tab {
+      flex: 1; padding: 8px; text-align: center; font-size: 13px; cursor: pointer;
+      border-radius: 6px; color: var(--text-secondary); transition: all 0.2s;
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+    }
+    .mode-tab:hover { color: var(--text-primary); }
+    .mode-tab.active { background: var(--bg-hover); color: #fff; }
 
     /* 左侧聊天列表 */
     .sidebar {
@@ -63,52 +107,96 @@
       padding: 8px 12px; display: flex; align-items: center; gap: 8px;
       border-bottom: 1px solid var(--border); height: 56px; flex-shrink: 0;
     }
-    .sidebar-header .menu-btn { font-size: 20px; cursor: pointer; padding: 8px; border-radius: 50%; background: none; border: none; color: var(--text-secondary); }
-    .sidebar-header .menu-btn:hover { background: var(--bg-hover); }
+    .sidebar-header .menu-btn {
+      width: 40px; height: 40px; cursor: pointer; border-radius: 50%;
+      background: none; border: none; color: var(--text-secondary);
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.2s;
+    }
+    .sidebar-header .menu-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
     .search-wrap { flex: 1; position: relative; }
     .search-wrap input {
-      background: var(--bg-main); border: none; border-radius: 22px; padding: 8px 16px 8px 40px;
-      width: 100%; color: #fff; font-size: 14px;
+      background: var(--bg-main); border: none; border-radius: 22px; padding: 9px 16px 9px 40px;
+      width: 100%; color: #fff; font-size: 14px; outline: none;
     }
-    .search-wrap::before { content: '🔍'; position: absolute; left: 14px; top: 50%; transform: translateY(-50%); font-size: 14px; opacity: 0.5; }
+    .search-wrap .search-icon {
+      position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+      color: var(--text-secondary);
+    }
 
     .chat-list { flex: 1; overflow-y: auto; }
     .chat-list::-webkit-scrollbar { width: 6px; }
     .chat-list::-webkit-scrollbar-thumb { background: #2b5278; border-radius: 3px; }
 
     .chat-item {
-      display: flex; align-items: center; padding: 10px 12px; gap: 10px; cursor: pointer; transition: background 0.15s;
+      display: flex; align-items: center; padding: 10px 12px; gap: 10px; cursor: pointer;
+      transition: background 0.15s;
     }
     .chat-item:hover { background: rgba(255,255,255,0.04); }
     .chat-item.active { background: var(--bg-hover); }
     .avatar {
       width: 54px; height: 54px; border-radius: 50%; flex-shrink: 0; overflow: hidden;
       display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 20px; color: #fff;
+      background: var(--bg-hover);
     }
-    .avatar img { width: 100%; height: 100%; object-fit: cover; }
+    .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .chat-info { flex: 1; min-width: 0; }
     .chat-info .name { font-size: 15px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .chat-info .preview { font-size: 14px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
     .chat-info .preview .you { color: var(--text-link); }
 
-    /* 右侧聊天窗口 */
+    .channel-badge {
+      display: inline-flex; align-items: center; gap: 2px;
+      font-size: 11px; color: var(--tg-blue); margin-top: 2px;
+    }
+
+    /* 右侧聊天/文件窗口 */
     .chat-window { flex: 1; display: flex; flex-direction: column; height: 100vh; position: relative; }
     .chat-window.no-chat { align-items: center; justify-content: center; }
     .chat-window.no-chat .placeholder { text-align: center; color: var(--text-secondary); }
-    .chat-window.no-chat .placeholder .icon { font-size: 56px; margin-bottom: 12px; }
+    .chat-window.no-chat .placeholder .icon-wrap {
+      width: 80px; height: 80px; border-radius: 50%; background: var(--bg-panel);
+      display: flex; align-items: center; justify-content: center; margin: 0 auto 16px;
+      color: var(--text-secondary);
+    }
 
     .chat-header {
       padding: 8px 16px; display: flex; align-items: center; gap: 12px;
       background: var(--bg-panel); border-bottom: 1px solid var(--border); height: 56px; flex-shrink: 0; z-index: 2;
     }
-    .chat-header .back-btn { display: none; font-size: 20px; cursor: pointer; color: var(--text-secondary); background: none; border: none; }
+    .chat-header .back-btn {
+      display: none; width: 40px; height: 40px; cursor: pointer; color: var(--text-secondary);
+      background: none; border: none; border-radius: 50%;
+      align-items: center; justify-content: center;
+    }
+    .chat-header .back-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
     .chat-header .avatar { width: 42px; height: 42px; font-size: 16px; }
-    .chat-header .info { flex: 1; }
-    .chat-header .info .name { font-size: 17px; font-weight: 500; }
+    .chat-header .info { flex: 1; min-width: 0; }
+    .chat-header .info .name { font-size: 16px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .chat-header .info .status { font-size: 13px; color: var(--text-secondary); margin-top: 1px; }
-    .chat-header .actions { display: flex; gap: 8px; }
-    .chat-header .icon-btn { font-size: 20px; cursor: pointer; color: var(--text-secondary); background: none; border: none; padding: 8px; border-radius: 50%; }
-    .chat-header .icon-btn:hover { background: var(--bg-hover); }
+    .chat-header .actions { display: flex; gap: 4px; }
+    .chat-header .icon-btn {
+      width: 40px; height: 40px; cursor: pointer; color: var(--text-secondary);
+      background: none; border: none; padding: 0; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s;
+    }
+    .chat-header .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+    /* 文件视图筛选栏 */
+    .file-filter-bar {
+      display: flex; gap: 8px; padding: 8px 16px; background: var(--bg-panel);
+      border-bottom: 1px solid var(--border); overflow-x: auto;
+    }
+    .file-filter-bar::-webkit-scrollbar { display: none; }
+    .filter-chip {
+      padding: 6px 14px; border-radius: 16px; font-size: 13px; cursor: pointer;
+      background: var(--bg-main); color: var(--text-secondary); white-space: nowrap;
+      display: flex; align-items: center; gap: 6px; transition: all 0.2s;
+      border: 1px solid transparent;
+    }
+    .filter-chip:hover { color: var(--text-primary); }
+    .filter-chip.active { background: var(--bg-hover); color: #fff; border-color: var(--tg-blue); }
 
     /* 消息区域 */
     .messages-wrap { flex: 1; overflow: hidden; position: relative; }
@@ -124,45 +212,115 @@
     .msg.out { margin-left: auto; flex-direction: row-reverse; }
     .msg.in { margin-right: auto; }
     .msg-bubble {
-      border-radius: 12px; padding: 6px 10px; position: relative; word-break: break-word; font-size: 15px; line-height: 1.4;
+      border-radius: 12px; padding: 6px 10px; position: relative; word-break: break-word;
+      font-size: 15px; line-height: 1.4;
     }
     .msg.in .msg-bubble { background: var(--bg-message-in); }
     .msg.out .msg-bubble { background: var(--bg-message-out); }
     .msg-bubble .sender { font-size: 13px; color: var(--tg-blue); font-weight: 600; margin-bottom: 2px; }
     .msg-bubble .text { white-space: pre-wrap; }
-    .msg-bubble .meta { font-size: 11px; color: var(--text-secondary); text-align: right; margin-top: 2px; }
+    .msg-bubble .meta { font-size: 11px; color: var(--text-secondary); text-align: right; margin-top: 2px; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
     .msg.out .msg-bubble .meta { color: rgba(255,255,255,0.6); }
 
     /* 消息内媒体 */
     .msg-media { border-radius: 8px; overflow: hidden; margin-bottom: 4px; max-width: 360px; }
     .msg-media img { width: 100%; display: block; cursor: pointer; }
-    .msg-media video { width: 100%; display: block; max-height: 400px; }
+
+    /* 视频卡片 */
+    .video-card {
+      position: relative; cursor: pointer; overflow: hidden; border-radius: 8px;
+      max-width: 360px; background: #000;
+    }
+    .video-card .thumb { width: 100%; display: block; }
+    .video-card .play-overlay {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.25); transition: background 0.2s;
+    }
+    .video-card:hover .play-overlay { background: rgba(0,0,0,0.35); }
+    .video-card .play-btn {
+      width: 64px; height: 64px; border-radius: 50%;
+      background: rgba(51, 144, 236, 0.9); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      transition: transform 0.2s, background 0.2s;
+    }
+    .video-card:hover .play-btn { transform: scale(1.05); background: var(--tg-blue); }
+    .video-card .play-btn .icon { stroke: #fff; width: 28px; height: 28px; margin-left: 3px; }
+    .video-card .duration {
+      position: absolute; bottom: 8px; right: 8px;
+      background: rgba(0,0,0,0.7); color: #fff; font-size: 12px;
+      padding: 2px 6px; border-radius: 4px;
+    }
+    .video-card .fullscreen-btn {
+      position: absolute; top: 8px; right: 8px;
+      width: 32px; height: 32px; border-radius: 50%;
+      background: rgba(0,0,0,0.6); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      opacity: 0; transition: opacity 0.2s; cursor: pointer; border: none;
+    }
+    .video-card:hover .fullscreen-btn { opacity: 1; }
+    .video-card .fullscreen-btn:hover { background: rgba(0,0,0,0.8); }
+
+    /* 视频播放器（内联） */
+    .video-player {
+      position: relative; max-width: 360px;
+    }
+    .video-player video {
+      width: 100%; display: block; max-height: 400px; background: #000;
+    }
+    .video-player .player-controls {
+      position: absolute; bottom: 0; left: 0; right: 0;
+      background: linear-gradient(transparent, rgba(0,0,0,0.7));
+      padding: 8px; display: flex; align-items: center; gap: 8px;
+      color: #fff; font-size: 12px;
+    }
+    .video-player .fs-btn {
+      margin-left: auto; cursor: pointer; background: none; border: none; color: #fff;
+      padding: 4px; display: flex; align-items: center; justify-content: center;
+    }
+
     .msg-media audio { width: 100%; }
     .msg-media .file-card {
-      display: flex; align-items: center; gap: 10px; padding: 8px; background: rgba(0,0,0,0.2); border-radius: 8px;
+      display: flex; align-items: center; gap: 10px; padding: 8px;
+      background: rgba(0,0,0,0.2); border-radius: 8px;
     }
-    .msg-media .file-icon { font-size: 32px; }
+    .msg-media .file-icon {
+      width: 44px; height: 44px; border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      background: var(--bg-hover); color: var(--tg-blue); flex-shrink: 0;
+    }
     .msg-media .file-info { flex: 1; min-width: 0; }
     .msg-media .file-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .msg-media .file-size { font-size: 12px; color: var(--text-secondary); }
-    .msg-media .file-dl-btn { background: var(--tg-blue); color: #fff; border: none; border-radius: 6px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+    .msg-media .file-dl-btn {
+      background: var(--tg-blue); color: #fff; border: none; border-radius: 6px;
+      padding: 6px 12px; cursor: pointer; font-size: 13px;
+      display: flex; align-items: center; gap: 4px; transition: background 0.2s;
+    }
+    .msg-media .file-dl-btn:hover { background: var(--tg-blue-hover); }
 
     /* 输入栏 */
     .input-bar {
       padding: 8px 16px; display: flex; align-items: flex-end; gap: 8px;
       background: var(--bg-panel); border-top: 1px solid var(--border); flex-shrink: 0;
     }
-    .input-bar .attach-btn { font-size: 22px; cursor: pointer; color: var(--text-secondary); background: none; border: none; padding: 8px; }
+    .input-bar .attach-btn {
+      width: 44px; height: 44px; cursor: pointer; color: var(--text-secondary);
+      background: none; border: none; padding: 0; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+      transition: color 0.2s;
+    }
     .input-bar .attach-btn:hover { color: var(--tg-blue); }
     .input-bar textarea {
       flex: 1; background: var(--bg-main); border: none; border-radius: 18px; padding: 10px 16px;
       color: #fff; font-size: 15px; resize: none; max-height: 120px; min-height: 40px; line-height: 1.4;
-      font-family: inherit;
+      font-family: inherit; outline: none;
     }
     .input-bar .send-btn {
       background: var(--tg-blue); color: #fff; border: none; border-radius: 50%;
-      width: 44px; height: 44px; font-size: 18px; cursor: pointer; flex-shrink: 0;
+      width: 44px; height: 44px; cursor: pointer; flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
+      transition: background 0.2s;
     }
     .input-bar .send-btn:hover { background: var(--tg-blue-hover); }
     .input-bar .send-btn:disabled { opacity: 0.3; cursor: default; }
@@ -174,24 +332,100 @@
       z-index: 100; transform: translateX(-100%); transition: transform 0.3s; overflow-y: auto;
     }
     .settings-panel.open { transform: translateX(0); }
-    .settings-panel .header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; }
-    .settings-panel .header .close { cursor: pointer; font-size: 20px; color: var(--text-secondary); background: none; border: none; }
+    .settings-panel .header {
+      padding: 16px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 12px;
+    }
+    .settings-panel .header .close {
+      cursor: pointer; color: var(--text-secondary); background: none; border: none;
+      width: 36px; height: 36px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .settings-panel .header .close:hover { background: var(--bg-hover); color: var(--text-primary); }
+    .settings-panel .header .title { font-size: 17px; font-weight: 500; }
+
+    /* 用户信息区 */
+    .user-profile {
+      padding: 20px 16px; display: flex; align-items: center; gap: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+    .user-profile .avatar { width: 60px; height: 60px; font-size: 22px; }
+    .user-profile .user-info { flex: 1; min-width: 0; }
+    .user-profile .user-name { font-size: 16px; font-weight: 500; }
+    .user-profile .user-phone { font-size: 13px; color: var(--text-secondary); margin-top: 2px; }
+
     .settings-panel .section { padding: 16px; border-bottom: 1px solid var(--border); }
-    .settings-panel .section h3 { font-size: 15px; color: var(--text-secondary); margin-bottom: 12px; }
-    .settings-panel .bg-option { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 8px; cursor: pointer; }
-    .settings-panel .bg-option:hover { background: var(--bg-hover); }
-    .settings-panel .bg-preview { width: 48px; height: 48px; border-radius: 8px; background: var(--bg-main); flex-shrink: 0; }
-    .settings-panel .bg-preview img { width: 100%; height: 100%; border-radius: 8px; object-fit: cover; }
+    .settings-panel .section h3 { font-size: 13px; color: var(--text-secondary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    /* 网盘频道选择 */
+    .channel-select {
+      display: flex; align-items: center; gap: 10px; padding: 10px;
+      background: var(--bg-main); border-radius: 8px; cursor: pointer;
+      transition: background 0.2s;
+    }
+    .channel-select:hover { background: var(--bg-hover); }
+    .channel-select .icon { color: var(--text-secondary); }
+    .channel-select .cs-info { flex: 1; min-width: 0; }
+    .channel-select .cs-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .channel-select .cs-hint { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+    .setting-item {
+      display: flex; align-items: center; gap: 12px; padding: 10px;
+      border-radius: 8px; cursor: pointer; transition: background 0.2s;
+    }
+    .setting-item:hover { background: var(--bg-hover); }
+    .setting-item .si-icon { color: var(--text-secondary); }
+    .setting-item .si-text { flex: 1; font-size: 14px; }
+    .setting-item.danger { color: #ff6b6b; }
+    .setting-item.danger .si-icon { color: #ff6b6b; }
+
+    .bg-option { display: flex; align-items: center; gap: 12px; padding: 8px; border-radius: 8px; cursor: pointer; }
+    .bg-option:hover { background: var(--bg-hover); }
+    .bg-preview { width: 48px; height: 48px; border-radius: 8px; background: var(--bg-main); flex-shrink: 0; }
+    .bg-preview img { width: 100%; height: 100%; border-radius: 8px; object-fit: cover; }
     .settings-panel input[type="file"] { width: 100%; }
 
     /* 图片预览弹窗 */
-    .preview-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 9999; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .preview-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.92); z-index: 9999;
+      display: flex; align-items: center; justify-content: center; padding: 20px;
+    }
     .preview-overlay img { max-width: 90vw; max-height: 90vh; border-radius: 8px; }
-    .preview-close { position: fixed; top: 16px; right: 20px; color: #fff; font-size: 32px; cursor: pointer; z-index: 10000; background: rgba(255,255,255,0.1); width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; }
+    .preview-close {
+      position: fixed; top: 16px; right: 20px; color: #fff; cursor: pointer; z-index: 10000;
+      background: rgba(255,255,255,0.1); width: 44px; height: 44px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.2s;
+    }
+    .preview-close:hover { background: rgba(255,255,255,0.2); }
+
+    /* 视频全屏弹窗 */
+    .video-modal {
+      position: fixed; inset: 0; background: #000; z-index: 9999;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .video-modal video { max-width: 100%; max-height: 100%; }
+    .video-modal .vm-close {
+      position: fixed; top: 16px; right: 20px; color: #fff; cursor: pointer; z-index: 10000;
+      background: rgba(255,255,255,0.1); width: 44px; height: 44px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+    }
 
     .loading-spinner { width: 32px; height: 32px; border: 3px solid #2b5278; border-top-color: var(--tg-blue); border-radius: 50%; animation: spin 0.8s linear infinite; margin: 20px auto; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .hidden { display: none !important; }
+
+    /* 加载占位符 */
+    .media-skeleton {
+      width: 300px; height: 200px; background: linear-gradient(90deg, #1a1a2e 25%, #252540 50%, #1a1a2e 75%);
+      background-size: 200% 100%; animation: skeleton-loading 1.5s infinite;
+      border-radius: 8px; display: flex; align-items: center; justify-content: center;
+      color: var(--text-secondary);
+    }
+    @keyframes skeleton-loading {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
 
     /* 响应式 */
     @media (max-width: 768px) {
@@ -199,18 +433,34 @@
       .sidebar.hidden-mobile { display: none; }
       .chat-window { display: none; }
       .chat-window.active-mobile { display: flex; }
-      .chat-header .back-btn { display: block; }
+      .chat-header .back-btn { display: flex; }
       .msg { max-width: 85%; }
+      .settings-panel { width: 85%; }
     }
   </style>
 </head>
 <body>
+
+  <!-- 启动页 -->
+  <div class="splash" id="splash">
+    <svg class="icon" viewBox="0 0 24 24">
+      <path d="M21.198 2.433a2.242 2.242 0 0 0-1.022.215l-16.5 7.5a2.25 2.25 0 0 0 .203 4.072l4.12 1.648 4.243-5.394a.75.75 0 0 1 1.18.884l-4.5 5.75a.75.75 0 0 1-.805.255l-4.05-1.62a.75.75 0 0 1-.472-.968l1.858-6.502 10.5-4.5a.75.75 0 0 1 .94.967l-6 10.5-.678 2.034 1.535 1.535a2.25 2.25 0 0 0 3.33-.635l6.5-12.75a2.247 2.247 0 0 0-.689-2.593z"/>
+    </svg>
+    <div class="text">正在连接...</div>
+    <div class="loading-bar"></div>
+  </div>
+
   <!-- 登录页 -->
-  <div id="login-view">
+  <div id="login-view" style="display:none;">
     <div class="login-card">
-      <h1>Telegram</h1>
-      <div class="subtitle">请登录你的账号</div>
-      <input id="phone" placeholder="+8613800138000" />
+      <div class="logo">
+        <svg class="icon icon-lg" style="width:48px;height:48px;" viewBox="0 0 24 24">
+          <path d="M21.198 2.433a2.242 2.242 0 0 0-1.022.215l-16.5 7.5a2.25 2.25 0 0 0 .203 4.072l4.12 1.648 4.243-5.394a.75.75 0 0 1 1.18.884l-4.5 5.75a.75.75 0 0 1-.805.255l-4.05-1.62a.75.75 0 0 1-.472-.968l1.858-6.502 10.5-4.5a.75.75 0 0 1 .94.967l-6 10.5-.678 2.034 1.535 1.535a2.25 2.25 0 0 0 3.33-.635l6.5-12.75a2.247 2.247 0 0 0-.689-2.593z"/>
+        </svg>
+      </div>
+      <h1>TG Files</h1>
+      <div class="subtitle">登录你的 Telegram 账号</div>
+      <input id="phone" placeholder="+86 138 0013 8000" />
       <div id="code-row" class="hidden">
         <input id="code" placeholder="验证码" style="margin-top: 10px;" />
       </div>
@@ -227,40 +477,93 @@
     <!-- 左侧 -->
     <div class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <button class="menu-btn" id="menu-btn">☰</button>
+        <button class="menu-btn" id="menu-btn" title="菜单">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
         <div class="search-wrap">
+          <svg class="icon icon-sm search-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input id="search-input" placeholder="搜索" />
         </div>
       </div>
+
+      <!-- 模式切换 -->
+      <div class="mode-tabs">
+        <div class="mode-tab active" data-mode="chat">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          聊天
+        </div>
+        <div class="mode-tab" data-mode="drive">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          网盘
+        </div>
+      </div>
+
       <div class="chat-list" id="chat-list"></div>
     </div>
 
-    <!-- 右侧聊天 -->
+    <!-- 右侧聊天/文件窗口 -->
     <div class="chat-window no-chat" id="chat-window">
       <div class="placeholder">
-        <div class="icon">💬</div>
-        <div>选择一个对话开始聊天</div>
+        <div class="icon-wrap">
+          <svg class="icon icon-lg" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <div id="placeholder-text">选择一个对话开始</div>
       </div>
+
       <div class="chat-header hidden" id="chat-header">
-        <button class="back-btn" id="back-btn">←</button>
+        <button class="back-btn" id="back-btn">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+        </button>
         <div class="avatar" id="chat-avatar"></div>
         <div class="info">
           <div class="name" id="chat-name"></div>
           <div class="status" id="chat-status"></div>
         </div>
         <div class="actions">
-          <button class="icon-btn" id="search-in-chat">🔍</button>
+          <button class="icon-btn" id="search-in-chat" title="搜索">
+            <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </button>
         </div>
       </div>
+
+      <!-- 文件筛选栏（网盘模式） -->
+      <div class="file-filter-bar hidden" id="file-filter-bar">
+        <div class="filter-chip active" data-filter="all">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          全部
+        </div>
+        <div class="filter-chip" data-filter="photo">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+          图片
+        </div>
+        <div class="filter-chip" data-filter="video">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+          视频
+        </div>
+        <div class="filter-chip" data-filter="audio">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          音频
+        </div>
+        <div class="filter-chip" data-filter="file">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          文件
+        </div>
+      </div>
+
       <div class="messages-wrap hidden" id="messages-wrap">
         <div class="messages-bg" id="messages-bg"></div>
         <div class="messages" id="messages"></div>
       </div>
+
       <div class="input-bar hidden" id="input-bar">
-        <button class="attach-btn" id="attach-btn">📎</button>
+        <button class="attach-btn" id="attach-btn" title="附件">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+        </button>
         <input type="file" id="file-input" multiple />
         <textarea id="msg-input" placeholder="输入消息..." rows="1"></textarea>
-        <button class="send-btn" id="send-btn">➤</button>
+        <button class="send-btn" id="send-btn" title="发送">
+          <svg class="icon icon-sm" style="color:#fff;" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
       </div>
     </div>
   </div>
@@ -268,9 +571,37 @@
   <!-- 设置面板 -->
   <div class="settings-panel" id="settings-panel">
     <div class="header">
-      <button class="close" id="settings-close">←</button>
-      <span>设置</span>
+      <button class="close" id="settings-close">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      </button>
+      <span class="title">设置</span>
     </div>
+
+    <!-- 用户信息 -->
+    <div class="user-profile" id="user-profile">
+      <div class="avatar" id="user-avatar">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      </div>
+      <div class="user-info">
+        <div class="user-name" id="user-name">加载中...</div>
+        <div class="user-phone" id="user-phone">-</div>
+      </div>
+    </div>
+
+    <!-- 网盘设置 -->
+    <div class="section">
+      <h3>网盘设置</h3>
+      <div class="channel-select" id="drive-channel-select">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        <div class="cs-info">
+          <div class="cs-name" id="drive-channel-name">未选择</div>
+          <div class="cs-hint">点击选择网盘频道</div>
+        </div>
+        <svg class="icon icon-sm" style="color:var(--text-secondary)" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg>
+      </div>
+    </div>
+
+    <!-- 聊天背景 -->
     <div class="section">
       <h3>聊天背景</h3>
       <div class="bg-option" data-bg="default">
@@ -282,25 +613,61 @@
         <span>Telegram 风格</span>
       </div>
       <div class="bg-option" data-bg="custom">
-        <div class="bg-preview" id="custom-bg-preview" style="background: #2b5278; display: flex; align-items: center; justify-content: center; font-size: 20px;">＋</div>
+        <div class="bg-preview" id="custom-bg-preview" style="background: #2b5278; display: flex; align-items: center; justify-content: center;">
+          <svg class="icon icon-sm" style="color:#fff;" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </div>
         <span>自定义图片</span>
       </div>
       <input type="file" id="bg-file-input" accept="image/*" style="margin-top: 8px;" />
-      <div style="margin-top: 8px;">
+      <div style="margin-top: 12px;">
         <label style="font-size: 13px; color: var(--text-secondary);">背景透明度</label>
-        <input type="range" id="bg-opacity" min="5" max="40" value="8" style="width: 100%;" />
+        <input type="range" id="bg-opacity" min="5" max="40" value="8" style="width: 100%; margin-top: 4px;" />
       </div>
     </div>
+
+    <!-- 账号 -->
     <div class="section">
       <h3>账号</h3>
-      <button id="logout-btn" style="background: #ff6b6b; color: #fff; border: none; border-radius: 8px; padding: 10px 16px; cursor: pointer; width: 100%; font-size: 14px;">退出登录</button>
+      <div class="setting-item danger" id="logout-btn">
+        <svg class="icon si-icon" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        <span class="si-text">退出登录</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 频道选择弹窗 -->
+  <div class="preview-overlay hidden" id="channel-selector-overlay" style="align-items:flex-start; padding-top: 60px;">
+    <div style="background: var(--bg-panel); border-radius: 12px; width: 360px; max-width: 90vw; max-height: 70vh; display: flex; flex-direction: column; overflow: hidden;">
+      <div style="padding: 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px;">
+        <button style="background:none; border:none; color:var(--text-secondary); cursor:pointer; padding:4px;" id="channel-selector-close">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+        <span style="font-weight: 500;">选择网盘频道</span>
+      </div>
+      <div style="padding: 8px 12px; border-bottom: 1px solid var(--border);">
+        <div class="search-wrap">
+          <svg class="icon icon-sm search-icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input id="channel-search-input" placeholder="搜索频道" />
+        </div>
+      </div>
+      <div id="channel-selector-list" style="flex: 1; overflow-y: auto;"></div>
     </div>
   </div>
 
   <!-- 图片预览 -->
   <div class="preview-overlay hidden" id="preview-overlay">
-    <div class="preview-close" id="preview-close">×</div>
+    <div class="preview-close" id="preview-close">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </div>
     <img id="preview-img" src="" alt="" />
+  </div>
+
+  <!-- 视频全屏 -->
+  <div class="video-modal hidden" id="video-modal">
+    <div class="vm-close" id="vm-close">
+      <svg class="icon icon-sm" viewBox="0 0 24 24"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </div>
+    <video id="modal-video" controls autoplay></video>
   </div>
 
   <script type="module" src="/src/main.js"></script>
