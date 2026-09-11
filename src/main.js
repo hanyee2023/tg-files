@@ -9,10 +9,11 @@ const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
 
 // ===== 代理 patch =====
 if (PROXY_DOMAIN) {
+  console.log('[Proxy] 代理启用:', PROXY_DOMAIN);
   const OrigWS = self.WebSocket;
   self.WebSocket = function (url, protocols) {
     if (typeof url === 'string' && url.includes('telegram.org')) {
-      try { const u = new URL(url); url = `wss://${PROXY_DOMAIN}/${u.hostname}${u.pathname}`; } catch (e) {}
+      try { const u = new URL(url); url = `wss://${PROXY_DOMAIN}/${u.hostname}${u.pathname}`; console.log('[Proxy] WS:', u.hostname + u.pathname, '->', url); } catch (e) {}
     }
     return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
   };
@@ -49,9 +50,12 @@ const COLORS = ['#e17076','#7bc862','#65aadd','#a695c7','#ee7aae','#6ec9cb','#fa
 const $ = id => document.getElementById(id);
 
 // ===== 初始化 =====
+let splashTimer = null;
+
 async function init() {
   // 点击 splash 跳过
   $('splash-view')?.addEventListener('click', () => {
+    if (splashTimer) { clearTimeout(splashTimer); splashTimer = null; }
     $('splash-view').classList.remove('show');
   });
 
@@ -65,17 +69,37 @@ async function init() {
   if (saved) {
     $('splash-view').classList.add('show');
     setSplashStatus('正在连接 Telegram...');
+
+    // 30 秒超时，防止卡死
+    splashTimer = setTimeout(() => {
+      console.log('[Splash] 30秒超时，跳转登录页');
+      try { client?.disconnect(); } catch(e) {}
+      client = null;
+      localStorage.removeItem('tg_session');
+      showLoginPage();
+      $('login-status').textContent = '连接超时，请重新登录';
+    }, 30000);
+
     try {
+      console.log('[Init] 创建 client, API_ID:', API_ID, 'PROXY:', PROXY_DOMAIN);
       client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, { connectionRetries: 5, retryDelay: 2000 });
+      console.log('[Init] 正在连接...');
       await client.connect();
+      console.log('[Init] 连接成功，获取用户信息...');
       me = await client.getMe();
+      console.log('[Init] 用户:', me?.firstName);
+      if (splashTimer) { clearTimeout(splashTimer); splashTimer = null; }
       enterApp();
       return;
     } catch (e) {
-      console.log('Session expired', e);
+      console.error('[Init] 连接失败:', e.message);
+      if (splashTimer) { clearTimeout(splashTimer); splashTimer = null; }
+      try { client?.disconnect(); } catch(e2) {}
+      client = null;
       localStorage.removeItem('tg_session');
     }
   }
+  console.log('[Init] 显示登录页');
   showLoginPage();
   $('login-status').textContent = '请输入手机号登录';
 }
@@ -107,12 +131,23 @@ $('main-btn').addEventListener('click', async () => {
     $('login-status').className = 'login-status';
     $('login-status').textContent = '正在连接 Telegram...';
     try {
-      if (!client) {
-        client = new TelegramClient(new StringSession(''), API_ID, API_HASH, { connectionRetries: 5, retryDelay: 2000 });
-        await client.connect();
-      }
+      // 总是创建新 client，避免复用坏掉的连接
+      try { client?.disconnect(); } catch(e) {}
+      client = new TelegramClient(new StringSession(''), API_ID, API_HASH, { connectionRetries: 5, retryDelay: 2000 });
+
+      // 连接 + 发送验证码，20秒超时
+      const connectPromise = client.connect();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('连接超时，请重试')), 20000)
+      );
+      await Promise.race([connectPromise, timeoutPromise]);
+
       $('login-status').textContent = '正在发送验证码...';
-      const r = await client.sendCode({ apiId: API_ID, apiHash: API_HASH }, phone);
+      const codePromise = client.sendCode({ apiId: API_ID, apiHash: API_HASH }, phone);
+      const codeTimeout = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('发送验证码超时，请重试')), 20000)
+      );
+      const r = await Promise.race([codePromise, codeTimeout]);
       phoneCodeHash = r.phoneCodeHash;
       $('code-row').classList.remove('hidden');
       $('main-btn').textContent = '登录';
