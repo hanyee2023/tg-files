@@ -155,7 +155,14 @@ $('main-btn').addEventListener('click', async () => {
         await connectWithTimeout(client, 20000);
       }
       $('login-status').textContent = '正在发送验证码...';
-      const r = await client.sendCode({ apiId: API_ID, apiHash: API_HASH }, phone);
+      // 给 sendCode 加超时
+      const sendCodeTimeout = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('发送验证码超时，请重试')), 20000);
+      });
+      const r = await Promise.race([
+        client.sendCode({ apiId: API_ID, apiHash: API_HASH }, phone),
+        sendCodeTimeout
+      ]);
       phoneCodeHash = r.phoneCodeHash;
       $('code-row').classList.remove('hidden');
       $('main-btn').textContent = '登录';
