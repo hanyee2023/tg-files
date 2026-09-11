@@ -6,14 +6,27 @@ const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
 if (PROXY_DOMAIN) {
   console.log('[Proxy] Patching WebSocket and fetch via:', PROXY_DOMAIN);
 
+  // 只替换 URL hostname 中包含 telegram.org 的请求
+  // 注意：用 hostname 判断，而不是整个 URL 字符串，避免路径中包含 "telegram.org" 时误替换
+  function shouldRewrite(urlStr) {
+    try {
+      const u = new URL(urlStr);
+      return u.hostname.endsWith('.telegram.org') && u.hostname !== PROXY_DOMAIN;
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Patch WebSocket
   const OrigWS = self.WebSocket;
   self.WebSocket = function (url, protocols) {
-    if (typeof url === 'string' && url.includes('telegram.org')) {
+    if (typeof url === 'string' && shouldRewrite(url)) {
       try {
         const u = new URL(url);
-        url = `wss://${PROXY_DOMAIN}/${u.hostname}${u.pathname}`;
+        const newUrl = `wss://${PROXY_DOMAIN}/${u.hostname}${u.pathname}`;
         console.log('[Proxy] WS rewrite:', u.hostname, '->', PROXY_DOMAIN);
+        console.log('[Proxy] WS URL:', newUrl);
+        url = newUrl;
       } catch (e) {
         console.error('[Proxy] WS rewrite error:', e);
       }
@@ -31,10 +44,11 @@ if (PROXY_DOMAIN) {
   const origFetch = self.fetch;
   self.fetch = function (input, init) {
     let urlStr = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-    if (urlStr.includes('telegram.org')) {
+    if (shouldRewrite(urlStr)) {
       try {
         const u = new URL(urlStr);
         const newUrl = `https://${PROXY_DOMAIN}/${u.hostname}${u.pathname}${u.search}`;
+        console.log('[Proxy] fetch rewrite:', u.hostname, '->', PROXY_DOMAIN);
         if (typeof input === 'string') {
           input = newUrl;
         } else {
