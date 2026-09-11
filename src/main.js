@@ -68,38 +68,19 @@ async function boot() {
     return;
   }
 
+  // 直接进入登录页，点击按钮后再连接（和昨天版本行为一致）
+  // 避免 splash 阶段连接导致的状态混乱
   const saved = localStorage.getItem('tg_session');
-  if (!saved) {
-    showLoginPage();
-    $('login-status').textContent = '请输入手机号登录';
-    return;
-  }
-
-  // 有 session，尝试恢复
-  setSplashStatus('正在连接 Telegram...');
-  try {
-    client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, {
-      connectionRetries: 5, retryDelay: 2000,
-    });
-    await client.connect();
-    setSplashStatus('连接成功，正在恢复会话...');
-    // 给 getMe 加超时，防止 session 无效时卡死
-    const getMeTimeout = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('会话恢复超时')), 15000);
-    });
-    me = await Promise.race([client.getMe(), getMeTimeout]);
-    clearTimeout(splashTimer);
-    setSplashStatus('登录成功，进入应用...');
-    // 即使 splash 已经超时跳去登录页，连接成功后也自动进入应用
-    enterApp();
-  } catch (e) {
-    console.warn('Session restore failed:', e);
-    setSplashStatus('会话失效，请重新登录');
-    localStorage.removeItem('tg_session');
+  if (saved) {
+    // 有保存的会话，快速过一下启动页然后进应用
+    setSplashStatus('正在启动...');
     setTimeout(() => {
       showLoginPage();
-      $('login-status').textContent = '会话已过期，请重新登录';
-    }, 1000);
+      $('login-status').textContent = '已保存会话，点击登录快速恢复';
+    }, 500);
+  } else {
+    showLoginPage();
+    $('login-status').textContent = '请输入手机号登录';
   }
 }
 
@@ -108,6 +89,12 @@ function showLoginPage() {
   $('splash-view').classList.remove('show');
   $('login-view').style.display = 'flex';
   // 显示代理状态
+  const hasSession = !!localStorage.getItem('tg_session');
+  if (hasSession) {
+    $('restore-btn').classList.remove('hidden');
+  } else {
+    $('restore-btn').classList.add('hidden');
+  }
   const proxyStatus = PROXY_DOMAIN
     ? `<div style="font-size:12px;color:#51cf66;margin-top:8px;">代理已启用: ${PROXY_DOMAIN}</div>`
     : `<div style="font-size:12px;color:#ff6b6b;margin-top:8px;">警告: 未配置代理</div>`;
@@ -134,6 +121,36 @@ async function connectWithTimeout(c, timeoutMs = 20000) {
   done = true;
   return result;
 }
+
+// ===== 恢复会话 =====
+$('restore-btn').addEventListener('click', async () => {
+  const saved = localStorage.getItem('tg_session');
+  if (!saved) return;
+  $('restore-btn').disabled = true;
+  $('main-btn').disabled = true;
+  $('login-status').className = 'login-status';
+  $('login-status').textContent = '正在恢复会话...';
+  try {
+    client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, {
+      connectionRetries: 5, retryDelay: 2000,
+    });
+    await client.connect();
+    me = await client.getMe();
+    $('login-status').className = 'login-status success';
+    $('login-status').textContent = '恢复成功，进入应用...';
+    setTimeout(() => enterApp(), 500);
+  } catch (e) {
+    console.error('Restore error:', e);
+    $('login-status').className = 'login-status error';
+    $('login-status').textContent = '恢复失败: ' + (e.message || String(e));
+    localStorage.removeItem('tg_session');
+    $('restore-btn').classList.add('hidden');
+    $('main-btn').disabled = false;
+    $('restore-btn').disabled = false;
+    try { if (client) { await client.disconnect(); } } catch(_) {}
+    client = null;
+  }
+});
 
 // ===== 登录流程 =====
 $('main-btn').addEventListener('click', async () => {
