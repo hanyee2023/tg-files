@@ -39,6 +39,7 @@ if (PROXY_DOMAIN) {
   self.WebSocket = function (url, protocols) {
     if (typeof url === 'string' && shouldRewrite(url)) {
       const newUrl = rewriteWsUrl(url);
+      console.log('[Proxy] WS URL FULL:', url);
       console.log('[Proxy] WS rewrite:', url, '->', newUrl);
       url = newUrl;
     }
