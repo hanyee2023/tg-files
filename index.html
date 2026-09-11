@@ -74,6 +74,8 @@
     }
     .login-btn:hover { background: var(--tg-blue-hover); }
     .login-btn:disabled { opacity: 0.5; cursor: default; }
+    .login-btn.secondary { background: transparent; border: 1px solid var(--tg-blue); color: var(--tg-blue); }
+    .login-btn.secondary:hover { background: rgba(51, 144, 236, 0.1); }
     .login-status { text-align: center; margin-top: 14px; font-size: 14px; color: var(--text-secondary); }
     .login-status.error { color: var(--danger); }
     .login-status.success { color: var(--success); }
@@ -417,6 +419,9 @@
       </div>
       <button class="login-btn" id="main-btn">
         发送验证码
+      </button>
+      <button class="login-btn secondary hidden" id="restore-btn">
+        恢复上次会话
       </button>
       <div id="login-status" class="login-status"></div>
     </div>
