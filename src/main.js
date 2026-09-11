@@ -145,15 +145,18 @@ $('main-btn').addEventListener('click', async () => {
     $('login-status').className = 'login-status';
     $('login-status').textContent = '正在连接 Telegram...';
     try {
-      if (!client) {
-        client = new TelegramClient(new StringSession(''), API_ID, API_HASH, {
-          connectionRetries: 1,
-          retryDelay: 1000,
-          autoReconnect: false,
-        });
-        $('login-status').textContent = '正在通过代理连接...';
-        await connectWithTimeout(client, 20000);
+      // 登录时总是用全新的 client，避免复用 splash 阶段残留的 client 导致状态混乱
+      if (client) {
+        try { await client.disconnect(); } catch(_) {}
+        client = null;
       }
+      client = new TelegramClient(new StringSession(''), API_ID, API_HASH, {
+        connectionRetries: 1,
+        retryDelay: 1000,
+        autoReconnect: false,
+      });
+      $('login-status').textContent = '正在通过代理连接...';
+      await connectWithTimeout(client, 20000);
       $('login-status').textContent = '正在发送验证码...';
       // 给 sendCode 加超时
       const sendCodeTimeout = new Promise((_, reject) => {
