@@ -391,19 +391,27 @@
   </style>
   <script>
     // 代理 patch —— 必须在所有模块加载前执行，否则 GramJS 会捕获原始 WebSocket 引用
+    // 优先使用 localStorage 配置，其次使用硬编码域名
     (function() {
-      var PROXY = 'web.reader.cc.cd';
+      var PROXY = localStorage.getItem('tg_proxy') || 'web.reader.cc.cd';
       if (!PROXY) { console.warn('[Proxy] 未配置代理域名'); return; }
 
       console.log('[Proxy] 注入代理 patch:', PROXY);
 
+      function shouldRewrite(urlStr) {
+        try {
+          var u = new URL(urlStr, location.href);
+          return u.hostname.endsWith('.telegram.org') && u.hostname !== PROXY;
+        } catch (e) { return false; }
+      }
+
       // Patch WebSocket
       var OrigWS = self.WebSocket;
       self.WebSocket = function(url, protocols) {
-        if (typeof url === 'string' && url.indexOf('telegram.org') !== -1) {
+        if (typeof url === 'string' && shouldRewrite(url)) {
           try {
             var u = new URL(url);
-            var newUrl = 'wss://' + PROXY + '/' + u.hostname + u.pathname;
+            var newUrl = 'wss://' + PROXY + '/' + u.hostname + u.pathname + u.search;
             console.log('[Proxy] WS rewrite:', url, '->', newUrl);
             url = newUrl;
           } catch(e) {}
@@ -420,9 +428,9 @@
       var origFetch = self.fetch;
       self.fetch = function(input, init) {
         var s = typeof input === 'string' ? input : (input && input.url ? input.url : '');
-        if (s.indexOf('telegram.org') !== -1) {
+        if (shouldRewrite(s)) {
           try {
-            var u = new URL(s);
+            var u = new URL(s, location.href);
             var n = 'https://' + PROXY + '/' + u.hostname + u.pathname + u.search;
             console.log('[Proxy] Fetch rewrite:', s, '->', n);
             input = typeof input === 'string' ? n : new Request(n, input);
@@ -431,10 +439,35 @@
         return origFetch.call(self, input, init);
       };
 
-      console.log('[Proxy] WebSocket 和 fetch patch 完成');
+      // Patch XMLHttpRequest
+      var OrigXHR = self.XMLHttpRequest;
+      self.XMLHttpRequest = function() {
+        var xhr = new OrigXHR();
+        var origOpen = xhr.open;
+        xhr.open = function(method, url, async, user, password) {
+          if (shouldRewrite(url)) {
+            try {
+              var u = new URL(url, location.href);
+              var n = 'https://' + PROXY + '/' + u.hostname + u.pathname + u.search;
+              console.log('[Proxy] XHR rewrite:', url, '->', n);
+              url = n;
+            } catch(e) {}
+          }
+          return origOpen.call(xhr, method, url, async !== false, user, password);
+        };
+        return xhr;
+      };
+      self.XMLHttpRequest.prototype = OrigXHR.prototype;
+      self.XMLHttpRequest.DONE = OrigXHR.DONE;
+      self.XMLHttpRequest.HEADERS_RECEIVED = OrigXHR.HEADERS_RECEIVED;
+      self.XMLHttpRequest.LOADING = OrigXHR.LOADING;
+      self.XMLHttpRequest.OPENED = OrigXHR.OPENED;
+      self.XMLHttpRequest.UNSENT = OrigXHR.UNSENT;
+
+      console.log('[Proxy] WebSocket, fetch, XHR patch 完成');
     })();
   </script>
-  <script type="module" crossorigin src="/assets/index-vR0gDTy0.js"></script>
+  <script type="module" crossorigin src="/assets/index-BRGrVD96.js"></script>
 </head>
 <body>
   <!-- 首屏加载 -->
