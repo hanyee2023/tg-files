@@ -41,12 +41,19 @@ console.log('[Boot] API_ID:', API_ID ? '✓' : '✗', 'PROXY:', PROXY_DOMAIN || 
 // ===== 启动（先显示 splash，再判断跳转） =====
 let splashTimer = null;
 
+function setSplashStatus(text) {
+  const el = $('splash-status');
+  if (el) el.textContent = text;
+  console.log('[Splash]', text);
+}
+
 async function boot() {
   // 安全兜底：30秒后强制显示登录页，防止卡死
   // 注意：session 恢复需要 WebSocket 握手 + MTProto 鉴权，较慢
   splashTimer = setTimeout(() => {
     console.warn('Splash timeout, forcing login page');
-    showLoginPage();
+    setSplashStatus('连接超时，跳转到登录页...');
+    setTimeout(() => showLoginPage(), 800);
   }, 30000);
 
   // 点击 splash 也可以跳过
@@ -69,20 +76,30 @@ async function boot() {
   }
 
   // 有 session，尝试恢复
+  setSplashStatus('正在连接 Telegram...');
   try {
     client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, {
       connectionRetries: 2, retryDelay: 2000, autoReconnect: true,
     });
     await client.connect();
-    me = await client.getMe();
+    setSplashStatus('连接成功，正在恢复会话...');
+    // 给 getMe 加超时，防止 session 无效时卡死
+    const getMeTimeout = new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('会话恢复超时')), 15000);
+    });
+    me = await Promise.race([client.getMe(), getMeTimeout]);
     clearTimeout(splashTimer);
+    setSplashStatus('登录成功，进入应用...');
     // 即使 splash 已经超时跳去登录页，连接成功后也自动进入应用
     enterApp();
   } catch (e) {
     console.warn('Session restore failed:', e);
+    setSplashStatus('会话失效，请重新登录');
     localStorage.removeItem('tg_session');
-    showLoginPage();
-    $('login-status').textContent = '请输入手机号登录';
+    setTimeout(() => {
+      showLoginPage();
+      $('login-status').textContent = '会话已过期，请重新登录';
+    }, 1000);
   }
 }
 
