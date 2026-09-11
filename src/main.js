@@ -1,14 +1,36 @@
-// ⚠️ proxy.js 必须第一个 import，确保 GramJS 加载前 patch 好 WebSocket 和 fetch
-import './proxy.js';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram/tl/api';
-import { HTTPConnection } from 'telegram/network';
 
 // ===== 配置 =====
 const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
 const API_HASH = import.meta.env.VITE_API_HASH || '';
 const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
+
+// ===== 代理 patch（和昨天版本完全一致）=====
+if (PROXY_DOMAIN) {
+  const OrigWS = self.WebSocket;
+  self.WebSocket = function (url, protocols) {
+    if (typeof url === 'string' && url.includes('telegram.org')) {
+      try { const u = new URL(url); url = `wss://${PROXY_DOMAIN}/${u.hostname}${u.pathname}`; } catch (e) {}
+    }
+    return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
+  };
+  self.WebSocket.prototype = OrigWS.prototype;
+  self.WebSocket.CONNECTING = OrigWS.CONNECTING;
+  self.WebSocket.OPEN = OrigWS.OPEN;
+  self.WebSocket.CLOSING = OrigWS.CLOSING;
+  self.WebSocket.CLOSED = OrigWS.CLOSED;
+  const origFetch = self.fetch;
+  self.fetch = function (input, init) {
+    let s = typeof input === 'string' ? input : (input?.url || '');
+    if (s.includes('telegram.org')) {
+      try { const u = new URL(s); const n = `https://${PROXY_DOMAIN}/${u.hostname}${u.pathname}${u.search}`;
+        input = typeof input === 'string' ? n : new Request(n, input); } catch (e) {}
+    }
+    return origFetch.call(self, input, init);
+  };
+}
 
 // ===== 状态 =====
 let client = null;
@@ -80,8 +102,7 @@ async function boot() {
   setSplashStatus('正在连接 Telegram...');
   try {
     client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, {
-      connection: HTTPConnection,
-      connectionRetries: 2, retryDelay: 2000, autoReconnect: true,
+      connectionRetries: 5, retryDelay: 2000,
     });
     await client.connect();
     setSplashStatus('连接成功，正在恢复会话...');
@@ -152,14 +173,9 @@ $('main-btn').addEventListener('click', async () => {
         try { await client.disconnect(); } catch(_) {}
         client = null;
       }
-      client = new TelegramClient(new StringSession(''), API_ID, API_HASH, {
-        connection: HTTPConnection,
-        connectionRetries: 1,
-        retryDelay: 1000,
-        autoReconnect: false,
-      });
+      client = new TelegramClient(new StringSession(''), API_ID, API_HASH, { connectionRetries: 5, retryDelay: 2000 });
       $('login-status').textContent = '正在通过代理连接...';
-      await connectWithTimeout(client, 20000);
+      await client.connect();
       $('login-status').textContent = '正在发送验证码...';
       // 给 sendCode 加超时
       const sendCodeTimeout = new Promise((_, reject) => {
