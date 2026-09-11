@@ -35,167 +35,119 @@ if (PROXY_DOMAIN) {
 // ===== 状态 =====
 let client = null;
 let phoneCodeHash = '';
-let currentEntity = null;
-let currentPeer = null;
-let allChats = [];
-let loginStep = 'phone';
-let currentMode = 'chat'; // 'chat' | 'drive'
-let driveChannelId = null;
-let currentFileFilter = 'all';
 let me = null;
-
-// 缓存
-const avatarCache = new Map();
-const mediaCache = new Map();
-const thumbCache = new Map();
+let currentMode = 'drive'; // 'drive' | 'chat'
+let currentEntity = null;
+let allChats = [];
+let driveChannelId = localStorage.getItem('drive_channel') || null;
+let loginStep = 'phone';
+let filesCache = {}; // channelId -> file array
 
 const COLORS = ['#e17076','#7bc862','#65aadd','#a695c7','#ee7aae','#6ec9cb','#faa774','#5b7b9a'];
+const LOAD_LIMIT = 100;
 
 // ===== DOM 引用 =====
 const $ = id => document.getElementById(id);
-const el = {
-  splash: $('splash'),
-  loginView: $('login-view'), appView: $('app-view'),
-  phone: $('phone'), code: $('code'), codeRow: $('code-row'),
-  password: $('password'), passwordRow: $('password-row'),
-  mainBtn: $('main-btn'), loginStatus: $('login-status'),
-  sidebar: $('sidebar'), chatList: $('chat-list'), searchInput: $('search-input'),
-  chatWindow: $('chat-window'), chatHeader: $('chat-header'), chatAvatar: $('chat-avatar'),
-  chatName: $('chat-name'), chatStatus: $('chat-status'),
-  messagesWrap: $('messages-wrap'), messages: $('messages'), messagesBg: $('messages-bg'),
-  inputBar: $('input-bar'), msgInput: $('msg-input'), sendBtn: $('send-btn'),
-  attachBtn: $('attach-btn'), fileInput: $('file-input'),
-  menuBtn: $('menu-btn'), settingsPanel: $('settings-panel'), settingsClose: $('settings-close'),
-  backBtn: $('back-btn'), logoutBtn: $('logout-btn'),
-  bgFileInput: $('bg-file-input'), bgOpacity: $('bg-opacity'),
-  previewOverlay: $('preview-overlay'), previewImg: $('preview-img'), previewClose: $('preview-close'),
-  // 新增
-  modeTabs: document.querySelectorAll('.mode-tab'),
-  placeholderText: $('placeholder-text'),
-  fileFilterBar: $('file-filter-bar'),
-  filterChips: document.querySelectorAll('.filter-chip'),
-  userAvatar: $('user-avatar'),
-  userName: $('user-name'),
-  userPhone: $('user-phone'),
-  driveChannelSelect: $('drive-channel-select'),
-  driveChannelName: $('drive-channel-name'),
-  channelSelectorOverlay: $('channel-selector-overlay'),
-  channelSelectorClose: $('channel-selector-close'),
-  channelSelectorList: $('channel-selector-list'),
-  channelSearchInput: $('channel-search-input'),
-  videoModal: $('video-modal'),
-  modalVideo: $('modal-video'),
-  vmClose: $('vm-close'),
-};
 
-// ===== 初始化（优化启动流程）=====
-async function init() {
-  // 先显示启动页
+// ===== 启动（先显示 splash，再判断跳转） =====
+async function boot() {
   if (!API_ID || !API_HASH) {
     hideSplash();
-    showLogin();
-    el.loginStatus.className = 'login-status error';
-    el.loginStatus.textContent = '请设置环境变量 VITE_API_ID 和 VITE_API_HASH';
+    $('login-status').className = 'login-status error';
+    $('login-status').textContent = '请设置环境变量';
     return;
   }
 
   const saved = localStorage.getItem('tg_session');
-  if (saved) {
-    // 后台静默连接，有 session 时快速进入
-    try {
-      client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, {
-        connectionRetries: 3,
-        retryDelay: 1500,
-      });
-      // 并行连接和预加载
-      await client.connect();
-      me = await client.getMe();
-      enterApp();
-      return;
-    } catch (e) {
-      console.log('Session expired or connect failed', e);
-      localStorage.removeItem('tg_session');
-    }
+  if (!saved) {
+    hideSplash();
+    $('login-status').textContent = '请输入手机号登录';
+    return;
   }
 
-  // 无 session 或连接失败，显示登录页
-  hideSplash();
-  showLogin();
+  // 有 session，尝试恢复
+  try {
+    client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, {
+      connectionRetries: 3, retryDelay: 1500, autoReconnect: true,
+    });
+    await client.connect();
+    me = await client.getMe();
+    enterApp();
+  } catch (e) {
+    console.warn('Session restore failed:', e);
+    localStorage.removeItem('tg_session');
+    hideSplash();
+    $('login-status').textContent = '请输入手机号登录';
+  }
 }
 
 function hideSplash() {
-  el.splash.classList.add('hidden');
-  setTimeout(() => {
-    el.splash.style.display = 'none';
-  }, 300);
-}
-
-function showLogin() {
-  el.loginView.style.display = 'flex';
-  el.loginStatus.textContent = '请输入手机号登录';
+  $('splash-view').classList.remove('show');
 }
 
 // ===== 登录流程 =====
-el.mainBtn.addEventListener('click', async () => {
+$('main-btn').addEventListener('click', async () => {
   if (loginStep === 'phone') {
-    const phone = el.phone.value.trim();
+    const phone = $('phone').value.trim();
     if (!phone) return;
-    el.mainBtn.disabled = true; el.mainBtn.textContent = '连接中...';
-    el.loginStatus.textContent = '';
+    $('main-btn').disabled = true; $('main-btn').textContent = '连接中...';
+    $('login-status').textContent = '';
     try {
       if (!client) {
-        client = new TelegramClient(new StringSession(''), API_ID, API_HASH, { connectionRetries: 3, retryDelay: 1500 });
+        client = new TelegramClient(new StringSession(''), API_ID, API_HASH, {
+          connectionRetries: 3, retryDelay: 2000,
+        });
         await client.connect();
       }
       const r = await client.sendCode({ apiId: API_ID, apiHash: API_HASH }, phone);
       phoneCodeHash = r.phoneCodeHash;
-      el.codeRow.classList.remove('hidden');
-      el.mainBtn.textContent = '登录';
-      el.mainBtn.disabled = false;
+      $('code-row').classList.remove('hidden');
+      $('main-btn').textContent = '登录';
+      $('main-btn').disabled = false;
       loginStep = 'code';
-      el.loginStatus.className = 'login-status success';
-      el.loginStatus.textContent = '验证码已发送';
+      $('login-status').className = 'login-status success';
+      $('login-status').textContent = '验证码已发送到 Telegram';
     } catch (e) {
-      el.loginStatus.className = 'login-status error';
-      el.loginStatus.textContent = e.message || String(e);
-      el.mainBtn.disabled = false; el.mainBtn.textContent = '发送验证码';
+      $('login-status').className = 'login-status error';
+      $('login-status').textContent = e.message || String(e);
+      $('main-btn').disabled = false; $('main-btn').textContent = '发送验证码';
     }
   } else if (loginStep === 'code') {
-    const code = el.code.value.trim();
-    const phone = el.phone.value.trim();
+    const code = $('code').value.trim();
+    const phone = $('phone').value.trim();
     if (!code) return;
-    el.mainBtn.disabled = true;
+    $('main-btn').disabled = true;
     try {
       await client.invoke(new Api.auth.SignIn({ phoneNumber: phone, phoneCodeHash, phoneCode: code }));
-      localStorage.setItem('tg_session', client.session.save());
       me = await client.getMe();
+      localStorage.setItem('tg_session', client.session.save());
       enterApp();
     } catch (e) {
       if (e.message?.includes('SESSION_PASSWORD_NEEDED')) {
-        el.passwordRow.classList.remove('hidden');
-        el.mainBtn.textContent = '确认';
+        $('password-row').classList.remove('hidden');
+        $('main-btn').textContent = '确认';
         loginStep = 'password';
-        el.loginStatus.className = 'login-status';
-        el.loginStatus.textContent = '请输入两步验证密码';
+        $('login-status').className = 'login-status';
+        $('login-status').textContent = '请输入两步验证密码';
       } else {
-        el.loginStatus.className = 'login-status error';
-        el.loginStatus.textContent = e.message || String(e);
+        $('login-status').className = 'login-status error';
+        $('login-status').textContent = e.message || String(e);
       }
-      el.mainBtn.disabled = false;
+      $('main-btn').disabled = false;
     }
   } else if (loginStep === 'password') {
-    const pwd = el.password.value;
+    const pwd = $('password').value;
     if (!pwd) return;
-    el.mainBtn.disabled = true;
+    $('main-btn').disabled = true;
     try {
       await client.signInWithPassword({ password: pwd });
-      localStorage.setItem('tg_session', client.session.save());
       me = await client.getMe();
+      localStorage.setItem('tg_session', client.session.save());
       enterApp();
     } catch (e) {
-      el.loginStatus.className = 'login-status error';
-      el.loginStatus.textContent = e.message || String(e);
-      el.mainBtn.disabled = false;
+      $('login-status').className = 'login-status error';
+      $('login-status').textContent = e.message || String(e);
+      $('main-btn').disabled = false;
     }
   }
 });
@@ -203,957 +155,741 @@ el.mainBtn.addEventListener('click', async () => {
 // ===== 进入主界面 =====
 function enterApp() {
   hideSplash();
-  el.loginView.style.display = 'none';
-  el.appView.classList.add('active');
-
-  // 加载用户信息
-  loadUserInfo();
-
-  // 加载网盘频道设置
-  driveChannelId = localStorage.getItem('drive_channel_id');
-  updateDriveChannelDisplay();
-
-  // 加载聊天列表
-  loadChatList();
+  $('login-view').style.display = 'none';
+  $('app-view').classList.add('active');
+  updateUserInfo();
   loadBackground();
+  loadChatList();
+  updateDriveBanner();
 
-  // 根据保存的模式切换
-  const savedMode = localStorage.getItem('view_mode') || 'chat';
-  switchMode(savedMode);
-}
-
-// ===== 用户信息 =====
-async function loadUserInfo() {
-  if (!me) return;
-  const name = (me.firstName || '') + (me.lastName ? ' ' + me.lastName : '');
-  el.userName.textContent = name || 'Unknown';
-  el.userPhone.textContent = '+' + (me.phone || '');
-
-  // 加载头像
-  try {
-    const avatarUrl = await getAvatarUrl(me);
-    if (avatarUrl) {
-      el.userAvatar.innerHTML = `<img src="${avatarUrl}" alt="" />`;
-    } else {
-      const initial = (me.firstName || me.username || 'U').charAt(0).toUpperCase();
-      const color = COLORS[0];
-      el.userAvatar.style.background = color;
-      el.userAvatar.innerHTML = escapeHtml(initial);
-    }
-  } catch (e) {
-    console.log('user avatar error', e);
+  // 如果设置了网盘频道，自动打开
+  if (driveChannelId) {
+    setTimeout(() => openDriveChannel(), 300);
   }
 }
 
-// ===== 头像获取（带缓存）=====
-async function getAvatarUrl(entity) {
-  const id = entity.id?.toString();
-  if (!id) return null;
-  if (avatarCache.has(id)) return avatarCache.get(id);
+function updateUserInfo() {
+  const name = (me.firstName || '') + (me.lastName ? ' ' + me.lastName : '') || '用户';
+  const initial = name.charAt(0).toUpperCase();
+  const phone = '+' + (me.phone || '');
 
+  // 侧边栏头像
+  const ua = $('user-avatar');
+  ua.innerHTML = initial;
+  ua.style.background = COLORS[0];
+
+  // 设置面板
+  $('settings-name').textContent = name;
+  $('settings-phone').textContent = phone;
+  $('settings-avatar').textContent = initial;
+  $('settings-avatar').style.background = COLORS[0];
+
+  // 加载头像
+  loadMyAvatar();
+}
+
+async function loadMyAvatar() {
   try {
-    const photos = await client.getProfilePhotos(entity, { limit: 1 });
+    const photos = await client.getProfilePhotos(me);
     if (photos.length > 0) {
       const buf = await client.downloadMedia(photos[0], { thumb: 0 });
       if (buf && buf.length > 0) {
         const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
-        avatarCache.set(id, url);
-        return url;
+        $('user-avatar').innerHTML = `<img src="${url}" alt="" />`;
+        $('settings-avatar').innerHTML = `<img src="${url}" alt="" />`;
       }
     }
   } catch (e) {}
-  return null;
 }
 
 // ===== 模式切换 =====
-function switchMode(mode) {
-  currentMode = mode;
-  localStorage.setItem('view_mode', mode);
-
-  el.modeTabs.forEach(tab => {
-    tab.classList.toggle('active', tab.dataset.mode === mode);
-  });
-
-  // 重置视图
-  resetChatWindow();
-
-  if (mode === 'drive') {
-    el.placeholderText.textContent = driveChannelId ? '加载网盘中...' : '请先在设置中选择网盘频道';
-    el.fileFilterBar.classList.remove('hidden');
-    el.inputBar.classList.add('hidden'); // 网盘模式隐藏输入栏
-
-    if (driveChannelId) {
-      openDriveChannel();
+document.querySelectorAll('.mode-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const mode = tab.dataset.mode;
+    if (mode === currentMode) return;
+    currentMode = mode;
+    document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t === tab));
+    if (currentEntity) {
+      renderCurrent();
     }
-  } else {
-    el.placeholderText.textContent = '选择一个对话开始';
-    el.fileFilterBar.classList.add('hidden');
-    loadChatList();
-  }
-}
-
-el.modeTabs.forEach(tab => {
-  tab.addEventListener('click', () => switchMode(tab.dataset.mode));
-});
-
-// ===== 文件筛选 =====
-el.filterChips.forEach(chip => {
-  chip.addEventListener('click', () => {
-    el.filterChips.forEach(c => c.classList.remove('active'));
-    chip.classList.add('active');
-    currentFileFilter = chip.dataset.filter;
-    filterMessages();
   });
 });
-
-function filterMessages() {
-  const msgs = el.messages.querySelectorAll('.msg');
-  msgs.forEach(msg => {
-    if (currentFileFilter === 'all') {
-      msg.style.display = '';
-      return;
-    }
-    const type = msg.dataset.mediaType;
-    msg.style.display = (type === currentFileFilter) ? '' : 'none';
-  });
-}
-
-// ===== 网盘频道 =====
-function updateDriveChannelDisplay() {
-  if (driveChannelId) {
-    const chat = allChats.find(c => c.id === driveChannelId);
-    el.driveChannelName.textContent = chat?.name || '已选择频道';
-  } else {
-    el.driveChannelName.textContent = '未选择';
-  }
-}
-
-el.driveChannelSelect.addEventListener('click', openChannelSelector);
-el.channelSelectorClose.addEventListener('click', () => {
-  el.channelSelectorOverlay.classList.add('hidden');
-});
-el.channelSelectorOverlay.addEventListener('click', (e) => {
-  if (e.target === el.channelSelectorOverlay) {
-    el.channelSelectorOverlay.classList.add('hidden');
-  }
-});
-
-async function openChannelSelector() {
-  el.channelSelectorOverlay.classList.remove('hidden');
-  el.channelSelectorList.innerHTML = '<div class="loading-spinner"></div>';
-  el.channelSearchInput.value = '';
-
-  try {
-    // 只显示频道和超级群
-    const channels = allChats.filter(c =>
-      c.entity.className === 'Channel' || c.entity.className === 'Chat'
-    );
-
-    if (channels.length === 0) {
-      // 重新加载一次确保有数据
-      await loadChatListPromise();
-      const ch2 = allChats.filter(c =>
-        c.entity.className === 'Channel' || c.entity.className === 'Chat'
-      );
-      renderChannelSelectorList(ch2);
-    } else {
-      renderChannelSelectorList(channels);
-    }
-  } catch (e) {
-    el.channelSelectorList.innerHTML = `<div style="padding:20px;color:#ff6b6b;">加载失败</div>`;
-  }
-}
-
-function renderChannelSelectorList(channels) {
-  el.channelSelectorList.innerHTML = '';
-  if (channels.length === 0) {
-    el.channelSelectorList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-secondary);">暂无频道</div>';
-    return;
-  }
-  channels.forEach((chat, idx) => {
-    const item = document.createElement('div');
-    item.className = 'chat-item';
-    item.style.borderRadius = '8px';
-    item.innerHTML = `
-      <div class="avatar" style="background:${chat.color};width:44px;height:44px;font-size:16px;">${escapeHtml(chat.name.charAt(0).toUpperCase())}</div>
-      <div class="chat-info">
-        <div class="name">${escapeHtml(chat.name)}</div>
-        <div class="channel-badge">
-          <svg class="icon icon-sm" style="width:12px;height:12px;" viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
-          频道
-        </div>
-      </div>
-    `;
-    item.addEventListener('click', () => {
-      driveChannelId = chat.id;
-      localStorage.setItem('drive_channel_id', chat.id);
-      updateDriveChannelDisplay();
-      el.channelSelectorOverlay.classList.add('hidden');
-      if (currentMode === 'drive') {
-        openDriveChannel();
-      }
-    });
-    el.channelSelectorList.appendChild(item);
-
-    // 异步加载头像
-    loadAvatarForSelector(chat, item);
-  });
-}
-
-async function loadAvatarForSelector(chat, itemEl) {
-  try {
-    const url = await getAvatarUrl(chat.entity);
-    if (url) {
-      const av = itemEl.querySelector('.avatar');
-      if (av) av.innerHTML = `<img src="${url}" alt="" />`;
-    }
-  } catch (e) {}
-}
-
-el.channelSearchInput.addEventListener('input', (e) => {
-  const q = e.target.value.toLowerCase();
-  const items = el.channelSelectorList.querySelectorAll('.chat-item');
-  items.forEach(item => {
-    const name = item.querySelector('.name')?.textContent.toLowerCase() || '';
-    item.style.display = name.includes(q) ? '' : 'none';
-  });
-});
-
-async function openDriveChannel() {
-  if (!driveChannelId) return;
-  const chat = allChats.find(c => c.id === driveChannelId);
-  if (!chat) {
-    // 尝试重新加载
-    await loadChatListPromise();
-    const chat2 = allChats.find(c => c.id === driveChannelId);
-    if (chat2) {
-      openChat(chat2, null);
-    }
-    return;
-  }
-  openChat(chat, null);
-}
-
-let chatListLoadPromise = null;
-function loadChatListPromise() {
-  if (chatListLoadPromise) return chatListLoadPromise;
-  chatListLoadPromise = loadChatList();
-  return chatListLoadPromise;
-}
 
 // ===== 聊天列表 =====
 async function loadChatList() {
-  if (currentMode === 'drive') return; // 网盘模式不刷新列表
-
-  el.chatList.innerHTML = '<div style="text-align:center;padding:20px;color:#708499;">加载中...</div>';
+  $('chat-list').innerHTML = '<div class="loading-spinner"></div>';
   try {
     const dialogs = await client.getDialogs({ limit: 100 });
     allChats = [];
-    el.chatList.innerHTML = '';
+    $('chat-list').innerHTML = '';
     for (let i = 0; i < dialogs.length; i++) {
       const d = dialogs[i];
       const entity = d.entity;
       const name = entity.title || entity.firstName || entity.username || 'Unknown';
       const preview = d.message?.text || d.message?.message || '';
       const color = COLORS[i % COLORS.length];
-      const chat = { dialog: d, entity, name, preview, color, id: entity.id?.toString() || '' };
+      const chat = {
+        dialog: d, entity, name, preview, color,
+        id: entity.id?.toString() || '',
+        isChannel: entity.className === 'Channel',
+      };
       allChats.push(chat);
-      const item = document.createElement('div');
-      item.className = 'chat-item';
-      item.dataset.idx = i;
-      item.innerHTML = `
-        <div class="avatar" style="background:${color}">${escapeHtml(name.charAt(0).toUpperCase())}</div>
-        <div class="chat-info">
-          <div class="name">${escapeHtml(name)}</div>
-          <div class="preview">${escapeHtml(preview.slice(0, 40))}</div>
-        </div>
-      `;
-      item.addEventListener('click', () => openChat(chat, item));
-      el.chatList.appendChild(item);
+      renderChatItem(chat, i);
     }
-    // 批量异步加载头像（带节流）
-    loadAvatarsBatch(allChats.slice(0, 20));
-    // 懒加载剩余头像
-    requestAnimationFrame(() => {
-      if (allChats.length > 20) {
-        setTimeout(() => loadAvatarsBatch(allChats.slice(20, 50)), 500);
-        setTimeout(() => loadAvatarsBatch(allChats.slice(50)), 1500);
-      }
-    });
+    // 异步加载头像
+    for (const chat of allChats) {
+      loadChatAvatar(chat);
+    }
   } catch (e) {
-    el.chatList.innerHTML = `<div style="padding:20px;color:#ff6b6b;">错误: ${escapeHtml(e.message)}</div>`;
+    $('chat-list').innerHTML = `<div style="padding:20px;color:#e17076;">错误: ${escapeHtml(e.message)}</div>`;
   }
-  chatListLoadPromise = null;
 }
 
-async function loadAvatarsBatch(chats) {
-  for (const chat of chats) {
-    try {
-      const url = await getAvatarUrl(chat.entity);
-      if (url) {
-        const idx = allChats.indexOf(chat);
-        const item = el.chatList.querySelector(`.chat-item[data-idx="${idx}"]`);
-        const av = item?.querySelector('.avatar');
-        if (av) av.innerHTML = `<img src="${url}" alt="" />`;
+function renderChatItem(chat, idx) {
+  const item = document.createElement('div');
+  item.className = 'chat-item';
+  item.dataset.idx = idx;
+  item.dataset.id = chat.id;
+  item.innerHTML = `
+    <div class="avatar" style="background:${chat.color}">${escapeHtml(chat.name.charAt(0).toUpperCase())}</div>
+    <div class="chat-info">
+      <div class="chat-name">${escapeHtml(chat.name)}</div>
+      <div class="chat-preview">${escapeHtml(chat.preview.slice(0, 40))}</div>
+    </div>
+    ${chat.id === driveChannelId ? '<svg class="pin-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>' : ''}
+  `;
+  item.addEventListener('click', () => openChat(chat, item));
+  $('chat-list').appendChild(item);
+}
+
+async function loadChatAvatar(chat) {
+  try {
+    const photos = await client.getProfilePhotos(chat.entity);
+    if (photos.length > 0) {
+      const buf = await client.downloadMedia(photos[0], { thumb: 0 });
+      if (buf && buf.length > 0) {
+        const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
+        const item = document.querySelector(`.chat-item[data-id="${chat.id}"] .avatar`);
+        if (item) item.innerHTML = `<img src="${url}" alt="" />`;
       }
-    } catch (e) {}
-  }
+    }
+  } catch (e) {}
 }
 
 // 搜索
-el.searchInput.addEventListener('input', (e) => {
+$('search-input').addEventListener('input', (e) => {
   const q = e.target.value.toLowerCase();
   document.querySelectorAll('.chat-item').forEach(item => {
-    const name = item.querySelector('.name')?.textContent.toLowerCase() || '';
+    const name = item.querySelector('.chat-name')?.textContent.toLowerCase() || '';
     item.style.display = name.includes(q) ? '' : 'none';
   });
 });
 
-// ===== 重置聊天窗口 =====
-function resetChatWindow() {
-  currentEntity = null;
-  currentPeer = null;
-  el.chatWindow.classList.add('no-chat');
-  el.chatHeader.classList.add('hidden');
-  el.messagesWrap.classList.add('hidden');
-  el.inputBar.classList.add('hidden');
-  el.fileFilterBar.classList.add('hidden');
-  el.messages.innerHTML = '';
-  document.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
-}
-
-// ===== 打开聊天 =====
+// ===== 打开聊天/频道 =====
 async function openChat(chat, itemEl) {
   currentEntity = chat.entity;
-  currentPeer = chat.dialog.inputPeer || chat.entity;
 
-  // UI 切换
+  // UI
   document.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
   if (itemEl) itemEl.classList.add('active');
 
-  el.chatWindow.classList.remove('no-chat');
-  el.chatWindow.querySelector('.placeholder')?.remove();
-  el.chatHeader.classList.remove('hidden');
-  el.messagesWrap.classList.remove('hidden');
+  $('main-area').classList.remove('empty');
+  $('main-area').querySelector('.empty-state')?.remove();
+  $('topbar').classList.remove('hidden');
+  $('topbar-name').textContent = chat.name;
+  $('topbar-sub').textContent = chat.isChannel ? '频道' : '对话';
+  $('topbar-avatar').textContent = chat.name.charAt(0).toUpperCase();
+  $('topbar-avatar').style.background = chat.color;
 
-  if (currentMode === 'drive') {
-    el.fileFilterBar.classList.remove('hidden');
-    el.inputBar.classList.add('hidden');
-  } else {
-    el.inputBar.classList.remove('hidden');
-  }
-
-  el.chatName.textContent = chat.name;
-  el.chatStatus.textContent = chat.entity.className === 'Channel' ? '频道' : '在线';
-  el.chatAvatar.innerHTML = escapeHtml(chat.name.charAt(0).toUpperCase());
-  el.chatAvatar.style.background = chat.color;
+  // 加载头像
+  (async () => {
+    try {
+      const photos = await client.getProfilePhotos(chat.entity);
+      if (photos.length > 0) {
+        const buf = await client.downloadMedia(photos[0], { thumb: 0 });
+        if (buf && buf.length > 0) {
+          const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
+          $('topbar-avatar').innerHTML = `<img src="${url}" alt="" />`;
+        }
+      }
+    } catch (e) {}
+  })();
 
   // 移动端
   if (window.innerWidth <= 768) {
-    el.sidebar.classList.add('hidden-mobile');
-    el.chatWindow.classList.add('active-mobile');
+    $('sidebar').classList.add('hidden-mobile');
+    $('main-area').classList.add('active-mobile');
   }
 
-  // 加载头像
-  getAvatarUrl(chat.entity).then(url => {
-    if (url) {
-      el.chatAvatar.innerHTML = `<img src="${url}" alt="" />`;
-    }
-  });
+  renderCurrent();
+}
 
-  // 加载消息
-  el.messages.innerHTML = '<div class="loading-spinner"></div>';
+function renderCurrent() {
+  $('files-grid').classList.add('hidden');
+  $('messages-wrap').classList.add('hidden');
+  $('input-bar').classList.add('hidden');
+
+  if (currentMode === 'drive') {
+    $('files-grid').classList.remove('hidden');
+    loadFilesGrid();
+  } else {
+    $('messages-wrap').classList.remove('hidden');
+    $('input-bar').classList.remove('hidden');
+    loadChatMessages();
+  }
+}
+
+// ===== 网盘：文件网格 =====
+async function loadFilesGrid() {
+  if (!currentEntity) return;
+  const cid = currentEntity.id?.toString();
+
+  // 如果有缓存，直接渲染
+  if (filesCache[cid] && filesCache[cid].length > 0) {
+    renderFilesGrid(filesCache[cid]);
+    return;
+  }
+
+  $('files-grid').innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;"><div class="loading-spinner"></div></div>';
+
   try {
-    const messages = await client.getMessages(chat.entity, { limit: currentMode === 'drive' ? 100 : 50 });
-    el.messages.innerHTML = '';
+    const messages = await client.getMessages(currentEntity, { limit: LOAD_LIMIT });
+    const files = [];
+    for (const msg of messages) {
+      const fi = parseFileInfo(msg);
+      if (fi) files.push(fi);
+    }
+    filesCache[cid] = files;
+    renderFilesGrid(files);
+  } catch (e) {
+    $('files-grid').innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:40px;color:#e17076;">加载失败: ${escapeHtml(e.message)}</div>`;
+    console.error('loadFilesGrid error:', e);
+  }
+}
+
+function renderFilesGrid(files) {
+  const grid = $('files-grid');
+  grid.innerHTML = '';
+  if (files.length === 0) {
+    grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:60px;color:#708499;">
+      <div style="font-size:48px;margin-bottom:12px;opacity:0.3;">📭</div>
+      此频道没有文件
+    </div>`;
+    return;
+  }
+
+  for (const fi of files) {
+    const card = document.createElement('div');
+    card.className = 'file-card';
+    const icon = fi.type === 'photo' ? '🖼️'
+      : fi.type === 'video' ? '🎬'
+      : fi.type === 'audio' ? '🎵'
+      : fi.type === 'doc' ? '📄' : '📦';
+
+    const hasPreview = fi.type === 'photo' || fi.type === 'video';
+    const isVideo = fi.type === 'video';
+
+    card.innerHTML = `
+      <div class="file-thumb" data-id="${fi.id}">
+        ${hasPreview ? `<div class="placeholder">${icon}</div>` : `<div class="placeholder">${icon}</div>`}
+        ${isVideo ? `<div class="play-overlay"><div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></div></div>` : ''}
+      </div>
+      <div class="file-info">
+        <div class="file-name">${escapeHtml(fi.name)}</div>
+        <div class="file-meta"><span>${fi.sizeText}</span></div>
+      </div>
+    `;
+
+    // 图片：点击预览
+    if (fi.type === 'photo') {
+      card.querySelector('.file-thumb').addEventListener('click', () => previewImage(fi));
+    }
+    // 视频：点击播放
+    else if (fi.type === 'video') {
+      card.querySelector('.file-thumb').addEventListener('click', () => playVideo(fi));
+    }
+    // 其他：点击下载
+    else {
+      card.addEventListener('click', () => downloadFile(fi));
+    }
+
+    grid.appendChild(card);
+
+    // 异步加载缩略图
+    if (hasPreview) {
+      loadThumbAsync(fi);
+    }
+  }
+}
+
+// 异步加载缩略图（不阻塞渲染）
+async function loadThumbAsync(fi) {
+  try {
+    const buf = await client.downloadMedia(fi.msg, { thumb: 1 });
+    if (buf && buf.length > 0) {
+      const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
+      const thumbEl = document.querySelector(`.file-thumb[data-id="${fi.id}"]`);
+      if (thumbEl) {
+        thumbEl.innerHTML = `
+          <img src="${url}" alt="" loading="lazy" />
+          ${fi.type === 'video' ? `<div class="play-overlay"><div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></div></div>` : ''}
+        `;
+        // 重新绑定事件
+        if (fi.type === 'photo') {
+          thumbEl.addEventListener('click', () => previewImage(fi));
+        } else if (fi.type === 'video') {
+          thumbEl.addEventListener('click', () => playVideo(fi));
+        }
+      }
+    }
+  } catch (e) {}
+}
+
+// ===== 图片预览 =====
+function previewImage(fi) {
+  // 先显示缩略图，再加载原图
+  client.downloadMedia(fi.msg).then(buf => {
+    if (buf && buf.length > 0) {
+      const url = URL.createObjectURL(new Blob([buf], { type: fi.mime || 'image/jpeg' }));
+      $('preview-img').src = url;
+    }
+  }).catch(e => console.error('preview error:', e));
+
+  $('preview-overlay').classList.remove('hidden');
+}
+
+$('preview-close').addEventListener('click', () => {
+  $('preview-overlay').classList.add('hidden');
+  setTimeout(() => { $('preview-img').src = ''; }, 300);
+});
+$('preview-overlay').addEventListener('click', (e) => {
+  if (e.target === $('preview-overlay')) {
+    $('preview-overlay').classList.add('hidden');
+    setTimeout(() => { $('preview-img').src = ''; }, 300);
+  }
+});
+
+// ===== 视频播放（浮窗） =====
+let currentVideoFile = null;
+
+function playVideo(fi) {
+  currentVideoFile = fi;
+  $('vp-title').textContent = fi.name;
+  $('video-player').classList.remove('hidden');
+  const video = $('vp-video');
+  video.src = '';
+  video.innerHTML = '';
+
+  // 先显示 loading
+  video.poster = '';
+
+  // 懒加载：点击才下载
+  client.downloadMedia(fi.msg).then(buf => {
+    if (buf && buf.length > 0) {
+      const url = URL.createObjectURL(new Blob([buf], { type: fi.mime || 'video/mp4' }));
+      video.src = url;
+      video.play().catch(() => {});
+    }
+  }).catch(e => {
+    console.error('video error:', e);
+    alert('视频加载失败: ' + e.message);
+  });
+}
+
+$('vp-close').addEventListener('click', () => {
+  const video = $('vp-video');
+  video.pause();
+  video.src = '';
+  $('video-player').classList.add('hidden');
+  currentVideoFile = null;
+});
+
+// ===== 聊天模式：消息列表 =====
+async function loadChatMessages() {
+  if (!currentEntity) return;
+  $('messages').innerHTML = '<div class="loading-spinner"></div>';
+  try {
+    const messages = await client.getMessages(currentEntity, { limit: 50 });
+    $('messages').innerHTML = '';
     let lastDate = '';
     for (const msg of messages.reverse()) {
+      if (msg.className === 'MessageEmpty') continue;
       const date = formatDate(msg.date);
       if (date !== lastDate) {
         lastDate = date;
         const sep = document.createElement('div');
         sep.className = 'date-sep';
         sep.innerHTML = `<span>${date}</span>`;
-        el.messages.appendChild(sep);
+        $('messages').appendChild(sep);
       }
-      renderMessage(msg, chat);
+      renderChatMessage(msg);
     }
-    el.messages.scrollTop = el.messages.scrollHeight;
-
-    // 网盘模式下应用筛选
-    if (currentMode === 'drive') {
-      filterMessages();
-    }
+    $('messages').scrollTop = $('messages').scrollHeight;
   } catch (e) {
-    el.messages.innerHTML = `<div style="padding:20px;color:#ff6b6b;">加载失败: ${escapeHtml(e.message)}</div>`;
+    $('messages').innerHTML = `<div style="padding:20px;color:#e17076;">加载失败: ${escapeHtml(e.message)}</div>`;
   }
 }
 
-// ===== 渲染消息 =====
-function renderMessage(msg, chat) {
-  if (msg.className === 'MessageEmpty') return;
+function renderChatMessage(msg) {
   const isOut = msg.out || false;
   const div = document.createElement('div');
   div.className = `msg ${isOut ? 'out' : 'in'}`;
 
-  // 检测媒体类型（用于筛选）
-  const mediaType = getMediaType(msg);
-  div.dataset.mediaType = mediaType;
-
   let mediaHtml = '';
   let textHtml = '';
 
-  // 文本
   const text = msg.text || msg.message || '';
-  if (text) textHtml = `<div class="text">${escapeHtml(text)}</div>`;
+  if (text) textHtml = `<div class="msg-text">${escapeHtml(text)}</div>`;
 
-  // 媒体
   if (msg.media) {
-    mediaHtml = renderMedia(msg, mediaType);
-  }
-
-  // 发送者名称（群聊/频道）
-  let senderHtml = '';
-  if (!isOut && (chat.entity?.className === 'Channel' || chat.entity?.className === 'Chat') && msg.sender) {
-    const senderName = msg.sender.firstName || msg.sender.title || '';
-    if (senderName) senderHtml = `<div class="sender">${escapeHtml(senderName)}</div>`;
+    mediaHtml = renderMsgMedia(msg);
   }
 
   const time = formatTime(msg.date);
-  div.innerHTML = `<div class="msg-bubble">${senderHtml}${mediaHtml}${textHtml}<div class="meta">${time}</div></div>`;
-  el.messages.appendChild(div);
-
-  // 懒加载媒体缩略图
-  if (mediaType === 'photo' || mediaType === 'video' || mediaType === 'file') {
-    lazyLoadMedia(msg, div, mediaType);
-  }
+  div.innerHTML = `<div class="msg-bubble">${mediaHtml}${textHtml}<div class="msg-time">${time}</div></div>`;
+  $('messages').appendChild(div);
 }
 
-function getMediaType(msg) {
-  if (!msg.media) return 'text';
-  const photo = msg.photo || msg.media?.photo || (msg.media?.webpage?.photo);
-  if (photo) return 'photo';
+function renderMsgMedia(msg) {
+  const doc = msg.document || msg.media?.document;
+  const photo = msg.photo || msg.media?.photo;
 
-  const doc = msg.document || msg.media?.document || (msg.media?.webpage?.document);
+  if (photo) {
+    const id = `msg-photo-${msg.id}`;
+    (async () => {
+      try {
+        const buf = await client.downloadMedia(msg, { thumb: 1 });
+        if (buf) {
+          const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
+          const el = $(id);
+          if (el) {
+            el.src = url;
+            el.addEventListener('click', () => {
+              client.downloadMedia(msg).then(fullBuf => {
+                if (fullBuf) {
+                  const fullUrl = URL.createObjectURL(new Blob([fullBuf], { type: 'image/jpeg' }));
+                  $('preview-img').src = fullUrl;
+                  $('preview-overlay').classList.remove('hidden');
+                }
+              });
+            });
+          }
+        }
+      } catch (e) {}
+    })();
+    return `<div class="msg-media"><img id="${id}" src="" alt="加载中..." style="min-height:80px;"/></div>`;
+  }
+
   if (doc) {
     const mime = doc.mimeType || '';
-    if (mime.startsWith('video/')) return 'video';
-    if (mime.startsWith('audio/')) return 'audio';
-    if (mime.startsWith('image/')) return 'photo';
-    return 'file';
-  }
-  return 'text';
-}
+    const attrs = doc.attributes || [];
+    const fa = attrs.find(a => a.fileName);
+    const fileName = fa?.fileName || `file_${msg.id}`;
+    const size = formatSize(doc.size || 0);
 
-function renderMedia(msg, mediaType) {
-  const media = msg.media;
-  const msgId = msg.id;
-
-  if (mediaType === 'photo') {
-    return `<div class="msg-media" id="photo-${msgId}">
-      <div class="media-skeleton">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-      </div>
-    </div>`;
-  }
-
-  if (mediaType === 'video') {
-    const doc = msg.document || media?.document;
-    const attrs = doc?.attributes || [];
-    const videoAttr = attrs.find(a => a.className === 'DocumentAttributeVideo');
-    let duration = '';
-    if (videoAttr?.duration) {
-      const mins = Math.floor(videoAttr.duration / 60);
-      const secs = videoAttr.duration % 60;
-      duration = `${mins}:${secs.toString().padStart(2, '0')}`;
+    if (mime.startsWith('video/')) {
+      const vid = `msg-vid-${msg.id}`;
+      (async () => {
+        try {
+          const buf = await client.downloadMedia(msg, { thumb: 0 });
+          if (buf) {
+            const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
+            const container = $(vid);
+            if (container) {
+              container.innerHTML = `<div style="position:relative;cursor:pointer;">
+                <img src="${url}" style="width:100%;border-radius:8px;"/>
+                <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;">
+                  <div style="width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                  </div>
+                </div>
+              </div>`;
+              container.querySelector('div').addEventListener('click', () => {
+                playVideo({ msg, name: fileName, mime });
+              });
+            }
+          }
+        } catch (e) {}
+      })();
+      return `<div class="msg-media" id="${vid}"><div style="width:240px;height:135px;background:#000;border-radius:8px;display:flex;align-items:center;justify-content:center;">🎬</div></div>`;
     }
 
-    return `<div class="msg-media" id="video-${msgId}">
-      <div class="video-card" data-msg-id="${msgId}">
-        <div class="media-skeleton" style="position:relative;">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-        </div>
-        ${duration ? `<div class="duration">${duration}</div>` : ''}
-        <button class="fullscreen-btn" data-action="fullscreen" data-msg-id="${msgId}" title="全屏播放">
-          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-        </button>
-      </div>
-    </div>`;
-  }
+    if (mime.startsWith('audio/')) {
+      const aid = `msg-aud-${msg.id}`;
+      (async () => {
+        try {
+          const buf = await client.downloadMedia(msg);
+          if (buf) {
+            const url = URL.createObjectURL(new Blob([buf], { type: mime }));
+            const el = $(aid);
+            if (el) el.innerHTML = `<audio src="${url}" controls style="width:100%;"></audio>`;
+          }
+        } catch (e) {}
+      })();
+      return `<div class="msg-media" id="${aid}"><div style="padding:8px;">🎵 加载中...</div></div>`;
+    }
 
-  if (mediaType === 'audio') {
-    return `<div class="msg-media" id="audio-${msgId}"><div style="padding:8px;color:var(--text-secondary);">🎵 加载中...</div></div>`;
-  }
-
-  if (mediaType === 'file') {
-    const doc = msg.document || media?.document;
-    const attrs = doc?.attributes || [];
-    const fileNameAttr = attrs.find(a => a.fileName);
-    const fileName = fileNameAttr?.fileName || `file_${msgId}`;
-    const size = formatSize(doc?.size || 0);
-    const mime = doc?.mimeType || '';
-
-    return `<div class="msg-media"><div class="file-card">
-      <div class="file-icon">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-      </div>
-      <div class="file-info"><div class="file-name">${escapeHtml(fileName)}</div><div class="file-size">${size}</div></div>
-      <button class="file-dl-btn" data-msg-id="${msgId}">
-        <svg class="icon icon-sm" style="width:14px;height:14px;color:#fff;" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      </button>
+    const icon = mime === 'application/pdf' ? '📄' : mime.includes('zip') ? '🗜️' : '📦';
+    return `<div class="msg-media"><div class="file-row">
+      <div class="file-icon">${icon}</div>
+      <div class="file-text"><div class="n">${escapeHtml(fileName)}</div><div class="s">${size}</div></div>
     </div></div>`;
   }
 
   return '';
 }
 
-// 懒加载媒体
-function lazyLoadMedia(msg, div, mediaType) {
-  const msgId = msg.id;
-
-  // 使用 IntersectionObserver 实现懒加载
-  if ('IntersectionObserver' in window) {
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          observer.unobserve(entry.target);
-          loadMediaContent(msg, mediaType);
-        }
-      });
-    }, { rootMargin: '200px' });
-    observer.observe(div);
-  } else {
-    // 不支持则直接加载
-    loadMediaContent(msg, mediaType);
-  }
-}
-
-async function loadMediaContent(msg, mediaType) {
-  const msgId = msg.id;
-
-  if (mediaType === 'photo') {
-    loadPhotoThumb(msg);
-  } else if (mediaType === 'video') {
-    loadVideoThumb(msg);
-  } else if (mediaType === 'audio') {
-    // 音频点击再加载
-  }
-}
-
-// 加载图片缩略图（优化：先加载小缩略图，不加载全尺寸）
-async function loadPhotoThumb(msg) {
-  const msgId = msg.id;
-  const cacheKey = `photo_${msgId}`;
-
-  if (thumbCache.has(cacheKey)) {
-    renderPhoto(msgId, thumbCache.get(cacheKey));
-    return;
-  }
-
-  try {
-    // 只加载缩略图级别 1（中等大小）
-    const buf = await client.downloadMedia(msg, { thumb: 1 });
-    if (buf && buf.length > 0) {
-      const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
-      thumbCache.set(cacheKey, url);
-      renderPhoto(msgId, url);
-
-      // 视口内的图片再异步加载全尺寸
-      const container = $(`photo-${msgId}`);
-      if (container && isInViewport(container)) {
-        loadFullPhoto(msg, msgId);
-      }
-    }
-  } catch (e) { console.log('photo thumb error', e); }
-}
-
-async function loadFullPhoto(msg, msgId) {
-  const cacheKey = `photo_full_${msgId}`;
-  if (mediaCache.has(cacheKey)) {
-    const img = document.querySelector(`#photo-${msgId} img`);
-    if (img) img.src = mediaCache.get(cacheKey);
-    return;
-  }
-
-  try {
-    const fullBuf = await client.downloadMedia(msg);
-    if (fullBuf && fullBuf.length > 0) {
-      const fullUrl = URL.createObjectURL(new Blob([fullBuf], { type: 'image/jpeg' }));
-      mediaCache.set(cacheKey, fullUrl);
-      const img = document.querySelector(`#photo-${msgId} img`);
-      if (img) img.src = fullUrl;
-    }
-  } catch (e) {}
-}
-
-function renderPhoto(msgId, url) {
-  const container = $(`photo-${msgId}`);
-  if (container) {
-    container.innerHTML = `<img src="${url}" alt="" loading="lazy" />`;
-    container.querySelector('img')?.addEventListener('click', () => {
-      // 点击时加载全尺寸并预览
-      const fullKey = `photo_full_${msgId}`;
-      if (mediaCache.has(fullKey)) {
-        openPreview(mediaCache.get(fullKey));
-      } else {
-        openPreview(url); // 先用缩略图预览
-      }
-    });
-  }
-}
-
-// 加载视频缩略图（Telegram 文档缩略图）
-async function loadVideoThumb(msg) {
-  const msgId = msg.id;
-  const cacheKey = `video_thumb_${msgId}`;
-
-  if (thumbCache.has(cacheKey)) {
-    renderVideoCard(msgId, thumbCache.get(cacheKey), msg);
-    return;
-  }
-
-  try {
-    // 下载 Telegram 提供的视频缩略图
-    const buf = await client.downloadMedia(msg, { thumb: 0 });
-    if (buf && buf.length > 0) {
-      const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
-      thumbCache.set(cacheKey, url);
-      renderVideoCard(msgId, url, msg);
-    }
-  } catch (e) {
-    console.log('video thumb error', e);
-    // 如果 Telegram 缩略图失败，用占位图
-  }
-}
-
-function renderVideoCard(msgId, thumbUrl, msg) {
-  const container = $(`video-${msgId}`);
-  if (!container) return;
-
-  const doc = msg.document || msg.media?.document;
-  const attrs = doc?.attributes || [];
-  const videoAttr = attrs.find(a => a.className === 'DocumentAttributeVideo');
-  let duration = '';
-  if (videoAttr?.duration) {
-    const mins = Math.floor(videoAttr.duration / 60);
-    const secs = videoAttr.duration % 60;
-    duration = `${mins}:${secs.toString().padStart(2, '0')}`;
-  }
-
-  container.innerHTML = `
-    <div class="video-card" data-msg-id="${msgId}">
-      <img class="thumb" src="${thumbUrl}" alt="" />
-      <div class="play-overlay" data-action="play-inline">
-        <div class="play-btn">
-          <svg class="icon" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-        </div>
-      </div>
-      ${duration ? `<div class="duration">${duration}</div>` : ''}
-      <button class="fullscreen-btn" data-action="fullscreen" title="全屏播放">
-        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-      </button>
-    </div>
-  `;
-
-  const card = container.querySelector('.video-card');
-
-  // 点击播放（内联）
-  card.querySelector('.play-overlay').addEventListener('click', (e) => {
-    e.stopPropagation();
-    playVideoInline(msgId, msg, doc);
-  });
-
-  // 全屏按钮
-  card.querySelector('.fullscreen-btn').addEventListener('click', (e) => {
-    e.stopPropagation();
-    playVideoFullscreen(msg, doc);
-  });
-}
-
-// 内联播放视频（点击才加载）
-async function playVideoInline(msgId, msg, doc) {
-  const container = $(`video-${msgId}`);
-  if (!container) return;
-
-  const cacheKey = `video_full_${msgId}`;
-  let videoUrl = mediaCache.get(cacheKey);
-
-  if (!videoUrl) {
-    container.innerHTML = `
-      <div class="video-player">
-        <div style="padding:40px;text-align:center;color:var(--text-secondary);">
-          <div class="loading-spinner"></div>
-          <div style="margin-top:8px;font-size:13px;">加载视频中...</div>
-        </div>
-      </div>
-    `;
-
-    try {
-      const fullBuf = await client.downloadMedia(msg);
-      if (fullBuf) {
-        videoUrl = URL.createObjectURL(new Blob([fullBuf], { type: doc.mimeType || 'video/mp4' }));
-        mediaCache.set(cacheKey, videoUrl);
-      }
-    } catch (e) {
-      container.innerHTML = `<div style="padding:20px;color:#ff6b6b;text-align:center;">加载失败</div>`;
-      return;
-    }
-  }
-
-  if (videoUrl) {
-    container.innerHTML = `
-      <div class="video-player">
-        <video src="${videoUrl}" controls autoplay style="max-width:360px;max-height:400px;border-radius:8px;"></video>
-        <div class="player-controls">
-          <button class="fs-btn" title="全屏">
-            <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
-          </button>
-        </div>
-      </div>
-    `;
-
-    const video = container.querySelector('video');
-    const fsBtn = container.querySelector('.fs-btn');
-    fsBtn.addEventListener('click', () => {
-      openVideoModal(videoUrl);
-      video.pause();
-    });
-  }
-}
-
-// 全屏播放视频
-async function playVideoFullscreen(msg, doc) {
-  const msgId = msg.id;
-  const cacheKey = `video_full_${msgId}`;
-  let videoUrl = mediaCache.get(cacheKey);
-
-  if (!videoUrl) {
-    // 显示加载状态
-    el.videoModal.classList.remove('hidden');
-    el.modalVideo.style.display = 'none';
-    const spinner = document.createElement('div');
-    spinner.className = 'loading-spinner';
-    spinner.id = 'modal-spinner';
-    spinner.style.marginTop = '45vh';
-    el.videoModal.appendChild(spinner);
-
-    try {
-      const fullBuf = await client.downloadMedia(msg);
-      if (fullBuf) {
-        videoUrl = URL.createObjectURL(new Blob([fullBuf], { type: doc.mimeType || 'video/mp4' }));
-        mediaCache.set(cacheKey, videoUrl);
-      }
-    } catch (e) {
-      spinner.remove();
-      const err = document.createElement('div');
-      err.style.color = '#ff6b6b';
-      err.style.textAlign = 'center';
-      err.style.marginTop = '45vh';
-      err.textContent = '加载失败';
-      el.videoModal.appendChild(err);
-      setTimeout(() => {
-        err.remove();
-        el.videoModal.classList.add('hidden');
-      }, 2000);
-      return;
-    }
-
-    spinner.remove();
-  }
-
-  openVideoModal(videoUrl);
-}
-
-function openVideoModal(url) {
-  el.videoModal.classList.remove('hidden');
-  el.modalVideo.style.display = '';
-  el.modalVideo.src = url;
-  el.modalVideo.play();
-}
-
-el.vmClose.addEventListener('click', () => {
-  el.modalVideo.pause();
-  el.modalVideo.src = '';
-  el.videoModal.classList.add('hidden');
-});
-
-// 工具函数：判断元素是否在视口内
-function isInViewport(el) {
-  const rect = el.getBoundingClientRect();
-  return (
-    rect.top >= -200 &&
-    rect.left >= 0 &&
-    rect.bottom <= (window.innerHeight + 200 || document.documentElement.clientHeight + 200) &&
-    rect.right <= (window.innerWidth || document.documentElement.clientWidth)
-  );
-}
-
-// 图片预览
-function openPreview(url) {
-  el.previewImg.src = url;
-  el.previewOverlay.classList.remove('hidden');
-}
-el.previewClose.addEventListener('click', () => el.previewOverlay.classList.add('hidden'));
-el.previewOverlay.addEventListener('click', (e) => {
-  if (e.target === el.previewOverlay) el.previewOverlay.classList.add('hidden');
-});
-
-// 文件下载按钮（事件委托）
-el.messages.addEventListener('click', async (e) => {
-  const btn = e.target.closest('.file-dl-btn');
-  if (!btn) return;
-  const msgId = parseInt(btn.dataset.msgId);
-  btn.disabled = true;
-  btn.innerHTML = '<div class="loading-spinner" style="width:14px;height:14px;border-width:2px;margin:0;"></div>';
-  try {
-    const msgs = await client.getMessages(currentEntity, { ids: [msgId] });
-    if (msgs[0]) {
-      const buf = await client.downloadMedia(msgs[0]);
-      if (buf) {
-        const doc = msgs[0].document || msgs[0].media?.document;
-        const blob = new Blob([buf], { type: doc?.mimeType || 'application/octet-stream' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        const attrs = doc?.attributes || [];
-        const fa = attrs.find(x => x.fileName);
-        a.href = url; a.download = fa?.fileName || `file_${msgId}`;
-        a.click(); URL.revokeObjectURL(url);
-      }
-    }
-    btn.disabled = false;
-    btn.innerHTML = `<svg class="icon icon-sm" style="width:14px;height:14px;color:#fff;" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
-  } catch (err) {
-    btn.disabled = false;
-    btn.innerHTML = '失败';
-    setTimeout(() => {
-      btn.innerHTML = `<svg class="icon icon-sm" style="width:14px;height:14px;color:#fff;" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>`;
-    }, 2000);
-    console.error(err);
-  }
-});
-
 // ===== 发送消息 =====
-el.sendBtn.addEventListener('click', () => sendMessage());
-el.msgInput.addEventListener('keydown', (e) => {
+$('send-btn').addEventListener('click', () => sendMessage());
+$('msg-input').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
 });
-el.msgInput.addEventListener('input', () => {
-  el.msgInput.style.height = 'auto';
-  el.msgInput.style.height = Math.min(el.msgInput.scrollHeight, 120) + 'px';
+$('msg-input').addEventListener('input', () => {
+  $('msg-input').style.height = 'auto';
+  $('msg-input').style.height = Math.min($('msg-input').scrollHeight, 120) + 'px';
 });
 
 async function sendMessage() {
-  const text = el.msgInput.value.trim();
+  const text = $('msg-input').value.trim();
   if (!text || !currentEntity) return;
-  el.msgInput.value = '';
-  el.msgInput.style.height = 'auto';
-  el.sendBtn.disabled = true;
+  $('msg-input').value = '';
+  $('msg-input').style.height = 'auto';
+  $('send-btn').disabled = true;
   try {
     await client.sendMessage(currentEntity, { message: text });
-    // 重新加载最新消息
-    const messages = await client.getMessages(currentEntity, { limit: 1 });
-    if (messages[0]) {
-      renderMessage(messages[0], { entity: currentEntity });
-      el.messages.scrollTop = el.messages.scrollHeight;
-    }
+    loadChatMessages();
   } catch (e) {
     alert('发送失败: ' + (e.message || e));
   }
-  el.sendBtn.disabled = false;
+  $('send-btn').disabled = false;
 }
 
-// ===== 发送文件 =====
-el.attachBtn.addEventListener('click', () => el.fileInput.click());
-el.fileInput.addEventListener('change', async () => {
-  const files = el.fileInput.files;
+// 发送文件
+$('attach-btn').addEventListener('click', () => $('file-input').click());
+$('file-input').addEventListener('change', async () => {
+  const files = $('file-input').files;
   if (!files.length || !currentEntity) return;
   for (const file of files) {
     try {
-      await client.sendFile(currentEntity, { file, forceDocument: false });
+      await client.sendFile(currentEntity, { file });
     } catch (e) {
       alert('发送失败: ' + (e.message || e));
     }
   }
-  el.fileInput.value = '';
-  // 刷新消息
-  const messages = await client.getMessages(currentEntity, { limit: 5 });
-  el.messages.innerHTML = '';
-  for (const msg of messages.reverse()) renderMessage(msg, { entity: currentEntity });
-  el.messages.scrollTop = el.messages.scrollHeight;
+  $('file-input').value = '';
+  loadChatMessages();
+  // 清除缓存
+  const cid = currentEntity.id?.toString();
+  delete filesCache[cid];
 });
 
-// ===== 返回（移动端）=====
-el.backBtn.addEventListener('click', () => {
-  el.sidebar.classList.remove('hidden-mobile');
-  el.chatWindow.classList.remove('active-mobile');
+// ===== 网盘频道功能 =====
+function updateDriveBanner() {
+  if (driveChannelId) {
+    const chat = allChats.find(c => c.id === driveChannelId);
+    if (chat) {
+      $('drive-subtitle').textContent = chat.name;
+    } else {
+      $('drive-subtitle').textContent = '已设置';
+    }
+  } else {
+    $('drive-subtitle').textContent = '点击设置网盘频道';
+  }
+  $('drive-channel-value').textContent = driveChannelId
+    ? (allChats.find(c => c.id === driveChannelId)?.name || '已设置')
+    : '未设置';
+}
+
+$('pin-btn').addEventListener('click', () => {
+  if (!currentEntity) return;
+  const id = currentEntity.id?.toString();
+  if (driveChannelId === id) {
+    driveChannelId = null;
+    localStorage.removeItem('drive_channel');
+  } else {
+    driveChannelId = id;
+    localStorage.setItem('drive_channel', id);
+  }
+  updateDriveBanner();
+  // 刷新列表标记
+  document.querySelectorAll('.chat-item .pin-icon').forEach(e => e.remove());
+  if (driveChannelId) {
+    const item = document.querySelector(`.chat-item[data-id="${driveChannelId}"]`);
+    if (item) {
+      const info = item.querySelector('.chat-info');
+      if (info) {
+        info.insertAdjacentHTML('afterend',
+          '<svg class="pin-icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16 12V4h1V2H7v2h1v8l-2 2v2h5.2v6h1.6v-6H18v-2l-2-2z"/></svg>');
+      }
+    }
+  }
 });
+
+$('drive-banner').addEventListener('click', () => {
+  if (driveChannelId) {
+    const chat = allChats.find(c => c.id === driveChannelId);
+    if (chat) {
+      const item = document.querySelector(`.chat-item[data-id="${driveChannelId}"]`);
+      openChat(chat, item);
+    }
+  } else {
+    // 提示选择频道
+    alert('请先从左侧列表选择一个频道，然后点击右上角的星标按钮设为网盘');
+  }
+});
+
+$('clear-drive-btn').addEventListener('click', () => {
+  driveChannelId = null;
+  localStorage.removeItem('drive_channel');
+  updateDriveBanner();
+  document.querySelectorAll('.chat-item .pin-icon').forEach(e => e.remove());
+});
+
+async function openDriveChannel() {
+  const chat = allChats.find(c => c.id === driveChannelId);
+  if (chat) {
+    const item = document.querySelector(`.chat-item[data-id="${driveChannelId}"]`);
+    openChat(chat, item);
+  }
+}
 
 // ===== 设置面板 =====
-el.menuBtn.addEventListener('click', () => el.settingsPanel.classList.add('open'));
-el.settingsClose.addEventListener('click', () => el.settingsPanel.classList.remove('open'));
+$('user-avatar').addEventListener('click', () => $('settings-panel').classList.add('open'));
+$('settings-close').addEventListener('click', () => $('settings-panel').classList.remove('open'));
 
 // 背景设置
 document.querySelectorAll('.bg-option').forEach(opt => {
   opt.addEventListener('click', () => {
+    document.querySelectorAll('.bg-option').forEach(o => o.classList.remove('active'));
+    opt.classList.add('active');
     const bg = opt.dataset.bg;
     if (bg === 'default') {
-      el.messagesBg.style.background = '#0e1621';
-      el.messagesBg.style.backgroundImage = '';
-      localStorage.removeItem('tg_bg');
-    } else if (bg === 'telegram') {
-      el.messagesBg.style.background = 'linear-gradient(135deg, #2b5278 0%, #0e1621 100%)';
-      el.messagesBg.style.backgroundImage = '';
-      localStorage.setItem('tg_bg', 'telegram');
+      $('messages-bg').style.background = 'linear-gradient(135deg, #0e1621, #1a2a3a)';
+      $('messages-bg').style.backgroundImage = '';
+    } else if (bg === 'tg') {
+      $('messages-bg').style.background = 'linear-gradient(135deg, #2b5278, #0e1621)';
+      $('messages-bg').style.backgroundImage = '';
+    } else if (bg === 'dark') {
+      $('messages-bg').style.background = '#0e1621';
+      $('messages-bg').style.backgroundImage = '';
     }
+    localStorage.setItem('tg_bg', bg);
   });
 });
 
-el.bgFileInput.addEventListener('change', (e) => {
+$('bg-opacity').addEventListener('input', (e) => {
+  $('messages-bg').style.opacity = (e.target.value / 100);
+  localStorage.setItem('tg_bg_opacity', e.target.value);
+});
+
+$('bg-file-input').addEventListener('change', (e) => {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = (ev) => {
     const dataUrl = ev.target.result;
-    localStorage.setItem('tg_bg', dataUrl);
-    el.messagesBg.style.backgroundImage = `url(${dataUrl})`;
-    el.messagesBg.style.backgroundSize = 'cover';
+    localStorage.setItem('tg_bg', 'custom');
+    localStorage.setItem('tg_bg_custom', dataUrl);
+    $('messages-bg').style.backgroundImage = `url(${dataUrl})`;
+    $('messages-bg').style.backgroundSize = 'cover';
+    document.querySelectorAll('.bg-option').forEach(o => o.classList.remove('active'));
   };
   reader.readAsDataURL(file);
-});
-
-el.bgOpacity.addEventListener('input', (e) => {
-  el.messagesBg.style.opacity = (e.target.value / 100);
-  localStorage.setItem('tg_bg_opacity', e.target.value);
 });
 
 function loadBackground() {
   const bg = localStorage.getItem('tg_bg');
   const opacity = localStorage.getItem('tg_bg_opacity') || '8';
-  el.bgOpacity.value = parseInt(opacity);
-  el.messagesBg.style.opacity = (parseInt(opacity) / 100);
-  if (bg === 'telegram') {
-    el.messagesBg.style.background = 'linear-gradient(135deg, #2b5278 0%, #0e1621 100%)';
-  } else if (bg && bg.startsWith('data:')) {
-    el.messagesBg.style.backgroundImage = `url(${bg})`;
-    el.messagesBg.style.backgroundSize = 'cover';
-    el.messagesBg.style.backgroundPosition = 'center';
-  } else {
-    el.messagesBg.style.background = '#0e1621';
+  $('bg-opacity').value = parseInt(opacity);
+  $('messages-bg').style.opacity = (parseInt(opacity) / 100);
+
+  if (bg === 'tg') {
+    $('messages-bg').style.background = 'linear-gradient(135deg, #2b5278, #0e1621)';
+    document.querySelector('.bg-option[data-bg="tg"]')?.classList.add('active');
+    document.querySelector('.bg-option[data-bg="default"]')?.classList.remove('active');
+  } else if (bg === 'dark') {
+    $('messages-bg').style.background = '#0e1621';
+    document.querySelector('.bg-option[data-bg="dark"]')?.classList.add('active');
+    document.querySelector('.bg-option[data-bg="default"]')?.classList.remove('active');
+  } else if (bg === 'custom') {
+    const custom = localStorage.getItem('tg_bg_custom');
+    if (custom) {
+      $('messages-bg').style.backgroundImage = `url(${custom})`;
+      $('messages-bg').style.backgroundSize = 'cover';
+    }
   }
 }
 
-// ===== 退出登录 =====
-el.logoutBtn.addEventListener('click', () => {
+// 退出登录
+$('logout-btn').addEventListener('click', () => {
   if (!confirm('确定退出登录？')) return;
   localStorage.removeItem('tg_session');
-  localStorage.removeItem('drive_channel_id');
-  localStorage.removeItem('view_mode');
   location.reload();
 });
 
-// ===== 工具函数 =====
+// 返回
+$('back-btn').addEventListener('click', () => {
+  $('sidebar').classList.remove('hidden-mobile');
+  $('main-area').classList.remove('active-mobile');
+});
+
+// ===== 文件信息解析 =====
+function parseFileInfo(msg) {
+  const media = msg.media;
+  if (!media) return null;
+
+  let doc = null;
+  let photo = null;
+
+  if (msg.document) doc = msg.document;
+  else if (media.document) doc = media.document;
+  else if (media.webpage?.document) doc = media.webpage.document;
+
+  if (msg.photo) photo = msg.photo;
+  else if (media.photo) photo = media.photo;
+  else if (media.webpage?.photo) photo = media.webpage.photo;
+
+  if (!doc && !photo) return null;
+
+  let name = '', size = 0, type = 'default', mime = '';
+
+  if (photo) {
+    name = `photo_${msg.id}.jpg`;
+    type = 'photo'; mime = 'image/jpeg';
+  } else if (doc) {
+    const attrs = doc.attributes || [];
+    const fa = attrs.find(a => a.fileName || a.classType === 'DocumentAttributeFilename');
+    name = fa?.fileName || `file_${msg.id}`;
+    size = doc.size || 0;
+    mime = doc.mimeType || '';
+    if (mime.startsWith('image/')) type = 'photo';
+    else if (mime.startsWith('video/')) type = 'video';
+    else if (mime.startsWith('audio/')) type = 'audio';
+    else type = 'doc';
+  }
+
+  return { id: `f-${msg.id}`, msg, name, size, type, mime, sizeText: formatSize(size) };
+}
+
+// ===== 下载 =====
+async function downloadFile(fi) {
+  try {
+    const buf = await client.downloadMedia(fi.msg);
+    if (!buf) return;
+    const blob = new Blob([buf], { type: fi.mime || 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = fi.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (e) {
+    alert('下载失败: ' + (e.message || e));
+  }
+}
+
+// ===== 工具 =====
 function formatSize(bytes) {
-  if (!bytes) return '';
+  if (!bytes) return '0 B';
   if (bytes < 1024) return bytes + ' B';
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
   if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
@@ -1176,11 +912,8 @@ function formatDate(ts) {
   const d = new Date(ts * 1000);
   const today = new Date();
   if (d.toDateString() === today.toDateString()) return '今天';
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (d.toDateString() === yesterday.toDateString()) return '昨天';
   return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
 }
 
 // ===== 启动 =====
-init();
+boot();
