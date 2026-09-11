@@ -42,11 +42,12 @@ console.log('[Boot] API_ID:', API_ID ? '✓' : '✗', 'PROXY:', PROXY_DOMAIN || 
 let splashTimer = null;
 
 async function boot() {
-  // 安全兜底：10秒后强制显示登录页，防止卡死
+  // 安全兜底：30秒后强制显示登录页，防止卡死
+  // 注意：session 恢复需要 WebSocket 握手 + MTProto 鉴权，较慢
   splashTimer = setTimeout(() => {
     console.warn('Splash timeout, forcing login page');
     showLoginPage();
-  }, 10000);
+  }, 30000);
 
   // 点击 splash 也可以跳过
   $('splash-view').addEventListener('click', () => {
@@ -75,6 +76,7 @@ async function boot() {
     await client.connect();
     me = await client.getMe();
     clearTimeout(splashTimer);
+    // 即使 splash 已经超时跳去登录页，连接成功后也自动进入应用
     enterApp();
   } catch (e) {
     console.warn('Session restore failed:', e);
