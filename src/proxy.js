@@ -41,7 +41,9 @@ if (PROXY_DOMAIN) {
       const newUrl = rewriteWsUrl(url);
       console.log('[Proxy] WS URL FULL:', url);
       console.log('[Proxy] WS rewrite:', url, '->', newUrl);
-      url = newUrl;
+      // 不传 protocols：CF Workers WebSocketPair 不支持协议协商
+      // GramJS 传的 'binary' 会导致握手失败
+      return new OrigWS(newUrl);
     }
     return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
   };
