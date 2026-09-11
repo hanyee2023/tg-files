@@ -50,9 +50,22 @@ const LOAD_LIMIT = 100;
 const $ = id => document.getElementById(id);
 
 // ===== 启动（先显示 splash，再判断跳转） =====
+let splashTimer = null;
+
 async function boot() {
+  // 安全兜底：10秒后强制显示登录页，防止卡死
+  splashTimer = setTimeout(() => {
+    console.warn('Splash timeout, forcing login page');
+    showLoginPage();
+  }, 10000);
+
+  // 点击 splash 也可以跳过
+  $('splash-view').addEventListener('click', () => {
+    showLoginPage();
+  });
+
   if (!API_ID || !API_HASH) {
-    hideSplash();
+    showLoginPage();
     $('login-status').className = 'login-status error';
     $('login-status').textContent = '请设置环境变量';
     return;
@@ -60,7 +73,7 @@ async function boot() {
 
   const saved = localStorage.getItem('tg_session');
   if (!saved) {
-    hideSplash();
+    showLoginPage();
     $('login-status').textContent = '请输入手机号登录';
     return;
   }
@@ -68,20 +81,28 @@ async function boot() {
   // 有 session，尝试恢复
   try {
     client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, {
-      connectionRetries: 3, retryDelay: 1500, autoReconnect: true,
+      connectionRetries: 2, retryDelay: 2000, autoReconnect: true,
     });
     await client.connect();
     me = await client.getMe();
+    clearTimeout(splashTimer);
     enterApp();
   } catch (e) {
     console.warn('Session restore failed:', e);
     localStorage.removeItem('tg_session');
-    hideSplash();
+    showLoginPage();
     $('login-status').textContent = '请输入手机号登录';
   }
 }
 
+function showLoginPage() {
+  clearTimeout(splashTimer);
+  $('splash-view').classList.remove('show');
+  $('login-view').style.display = 'flex';
+}
+
 function hideSplash() {
+  clearTimeout(splashTimer);
   $('splash-view').classList.remove('show');
 }
 
