@@ -389,6 +389,52 @@
       .files-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; padding: 10px; }
     }
   </style>
+  <script>
+    // 代理 patch —— 必须在所有模块加载前执行，否则 GramJS 会捕获原始 WebSocket 引用
+    (function() {
+      var PROXY = 'web.reader.cc.cd';
+      if (!PROXY) { console.warn('[Proxy] 未配置代理域名'); return; }
+
+      console.log('[Proxy] 注入代理 patch:', PROXY);
+
+      // Patch WebSocket
+      var OrigWS = self.WebSocket;
+      self.WebSocket = function(url, protocols) {
+        if (typeof url === 'string' && url.indexOf('telegram.org') !== -1) {
+          try {
+            var u = new URL(url);
+            var newUrl = 'wss://' + PROXY + '/' + u.hostname + u.pathname;
+            console.log('[Proxy] WS rewrite:', url, '->', newUrl);
+            url = newUrl;
+          } catch(e) {}
+        }
+        return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
+      };
+      self.WebSocket.prototype = OrigWS.prototype;
+      self.WebSocket.CONNECTING = OrigWS.CONNECTING;
+      self.WebSocket.OPEN = OrigWS.OPEN;
+      self.WebSocket.CLOSING = OrigWS.CLOSING;
+      self.WebSocket.CLOSED = OrigWS.CLOSED;
+
+      // Patch fetch
+      var origFetch = self.fetch;
+      self.fetch = function(input, init) {
+        var s = typeof input === 'string' ? input : (input && input.url ? input.url : '');
+        if (s.indexOf('telegram.org') !== -1) {
+          try {
+            var u = new URL(s);
+            var n = 'https://' + PROXY + '/' + u.hostname + u.pathname + u.search;
+            console.log('[Proxy] Fetch rewrite:', s, '->', n);
+            input = typeof input === 'string' ? n : new Request(n, input);
+          } catch(e) {}
+        }
+        return origFetch.call(self, input, init);
+      };
+
+      console.log('[Proxy] WebSocket 和 fetch patch 完成');
+    })();
+  </script>
+  <script type="module" crossorigin src="/assets/index-vR0gDTy0.js"></script>
 </head>
 <body>
   <!-- 首屏加载 -->
@@ -580,6 +626,5 @@
     <img id="preview-img" src="" alt="" />
   </div>
 
-  <script type="module" src="/src/main.js"></script>
 </body>
 </html>
