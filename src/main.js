@@ -1,18 +1,24 @@
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram/tl/api';
+import { PromisedWebSockets } from 'telegram/extensions/PromisedWebSockets';
+import { NewMessage } from 'telegram/events';
 
-// ===== 配置 =====
+// ===== 配置（来自 Cloudflare Pages 的 Build 环境变量）=====
 const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
 const API_HASH = import.meta.env.VITE_API_HASH || '';
 const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
 
-// ===== 代理 patch =====
+// ===== 代理 patch（必须在使用 WebSocket 之前安装）=====
+// 把 GramJS 发往 wss://<dc>.web.telegram.org/... 的连接，改写成走你的 Cloudflare Worker 反代。
 if (PROXY_DOMAIN) {
   const OrigWS = self.WebSocket;
   self.WebSocket = function (url, protocols) {
     if (typeof url === 'string' && url.includes('telegram.org')) {
-      try { const u = new URL(url); url = `wss://${PROXY_DOMAIN}/${u.hostname}${u.pathname}`; } catch (e) {}
+      try {
+        const u = new URL(url);
+        url = `wss://${PROXY_DOMAIN}/${u.hostname}${u.pathname}`;
+      } catch (e) {}
     }
     return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
   };
@@ -21,12 +27,16 @@ if (PROXY_DOMAIN) {
   self.WebSocket.OPEN = OrigWS.OPEN;
   self.WebSocket.CLOSING = OrigWS.CLOSING;
   self.WebSocket.CLOSED = OrigWS.CLOSED;
+
   const origFetch = self.fetch;
   self.fetch = function (input, init) {
     let s = typeof input === 'string' ? input : (input?.url || '');
     if (s.includes('telegram.org')) {
-      try { const u = new URL(s); const n = `https://${PROXY_DOMAIN}/${u.hostname}${u.pathname}${u.search}`;
-        input = typeof input === 'string' ? n : new Request(n, input); } catch (e) {}
+      try {
+        const u = new URL(s);
+        const n = `https://${PROXY_DOMAIN}/${u.hostname}${u.pathname}${u.search}`;
+        input = typeof input === 'string' ? n : new Request(n, input);
+      } catch (e) {}
     }
     return origFetch.call(self, input, init);
   };
@@ -39,11 +49,37 @@ let currentEntity = null;
 let currentPeer = null;
 let allChats = [];
 let loginStep = 'phone';
+let handlersRegistered = false;
 
 const COLORS = ['#e17076','#7bc862','#65aadd','#a695c7','#ee7aae','#6ec9cb','#faa774','#5b7b9a'];
 
+// ===== 创建客户端（统一配置浏览器 WebSocket 传输）=====
+// 关键：useWSS + networkSocket: PromisedWebSockets 让 GramJS 在浏览器里真的走 WebSocket，
+// 否则默认 ConnectionTCPObfuscated 依赖 Node 的 net.Socket，浏览器里会直接报错连不上。
+function createClient(sessionStr) {
+  return new TelegramClient(
+    new StringSession(sessionStr || ''),
+    API_ID,
+    API_HASH,
+    {
+      connectionRetries: 5,
+      retryDelay: 2000,
+      useWSS: true,
+      networkSocket: PromisedWebSockets,
+    }
+  );
+}
+
+// 持久化登录态，缓解刷新后 AUTH_KEY_DUPLICATED 掉登录
+function saveSession() {
+  try {
+    if (client) localStorage.setItem('tg_session', client.session.save());
+  } catch (e) {}
+}
+window.addEventListener('beforeunload', saveSession);
+
 // ===== DOM 引用 =====
-const $ = id => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 const el = {
   loginView: $('login-view'), appView: $('app-view'),
   phone: $('phone'), code: $('code'), codeRow: $('code-row'),
@@ -65,18 +101,22 @@ const el = {
 async function init() {
   if (!API_ID || !API_HASH) {
     el.loginStatus.className = 'login-status error';
-    el.loginStatus.textContent = '请设置环境变量';
+    el.loginStatus.textContent = '请设置环境变量（VITE_API_ID / VITE_API_HASH / VITE_PROXY_DOMAIN）';
     return;
   }
   const saved = localStorage.getItem('tg_session');
   if (saved) {
     try {
-      client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, { connectionRetries: 5, retryDelay: 2000 });
+      client = createClient(saved);
       await client.connect();
       await client.getMe();
+      registerHandlers();
       enterApp();
       return;
-    } catch (e) { console.log('Session expired', e); }
+    } catch (e) {
+      console.log('Session expired', e);
+      localStorage.removeItem('tg_session');
+    }
   }
   el.loginStatus.textContent = '请输入手机号登录';
 }
@@ -89,10 +129,8 @@ el.mainBtn.addEventListener('click', async () => {
     el.mainBtn.disabled = true; el.mainBtn.textContent = '连接中...';
     el.loginStatus.textContent = '';
     try {
-      if (!client) {
-        client = new TelegramClient(new StringSession(''), API_ID, API_HASH, { connectionRetries: 5, retryDelay: 2000 });
-        await client.connect();
-      }
+      if (!client) client = createClient('');
+      await client.connect();
       const r = await client.sendCode({ apiId: API_ID, apiHash: API_HASH }, phone);
       phoneCodeHash = r.phoneCodeHash;
       el.codeRow.classList.remove('hidden');
@@ -113,7 +151,8 @@ el.mainBtn.addEventListener('click', async () => {
     el.mainBtn.disabled = true;
     try {
       await client.invoke(new Api.auth.SignIn({ phoneNumber: phone, phoneCodeHash, phoneCode: code }));
-      localStorage.setItem('tg_session', client.session.save());
+      saveSession();
+      registerHandlers();
       enterApp();
     } catch (e) {
       if (e.message?.includes('SESSION_PASSWORD_NEEDED')) {
@@ -134,7 +173,8 @@ el.mainBtn.addEventListener('click', async () => {
     el.mainBtn.disabled = true;
     try {
       await client.signInWithPassword({ password: pwd });
-      localStorage.setItem('tg_session', client.session.save());
+      saveSession();
+      registerHandlers();
       enterApp();
     } catch (e) {
       el.loginStatus.className = 'login-status error';
@@ -149,6 +189,23 @@ function enterApp() {
   el.appView.classList.add('active');
   loadChatList();
   loadBackground();
+}
+
+// ===== 实时消息监听 =====
+function registerHandlers() {
+  if (handlersRegistered || !client) return;
+  handlersRegistered = true;
+  client.addEventHandler(async (event) => {
+    const m = event.message;
+    if (!m) return;
+    updateChatPreview(m);
+    saveSession();
+    if (m.out) return; // 发出的消息已在 sendMessage 里渲染
+    if (currentEntity && m.chatId?.toString() === currentEntity.id?.toString()) {
+      renderMessage(m, { entity: currentEntity });
+      el.messages.scrollTop = el.messages.scrollHeight;
+    }
+  }, new NewMessage({}));
 }
 
 // ===== 聊天列表 =====
@@ -179,13 +236,29 @@ async function loadChatList() {
       item.addEventListener('click', () => openChat(chat, item));
       el.chatList.appendChild(item);
     }
-    // 异步加载头像
+    // 异步加载头像（进入对话时才需要，这里仍预载列表头像）
     for (let i = 0; i < allChats.length; i++) {
       loadAvatar(allChats[i]);
     }
   } catch (e) {
     el.chatList.innerHTML = `<div style="padding:20px;color:#ff6b6b;">错误: ${escapeHtml(e.message)}</div>`;
   }
+}
+
+// 更新左侧列表预览（收到/发出消息时调用）
+function updateChatPreview(m) {
+  const chatId = m.chatId?.toString();
+  if (!chatId) return;
+  const chat = allChats.find((c) => c.id === chatId);
+  if (!chat) return;
+  const text = typeof m.message === 'string'
+    ? m.message
+    : (typeof m.text === 'string' ? m.text : '');
+  chat.preview = text;
+  const idx = allChats.indexOf(chat);
+  const item = el.chatList.querySelector(`.chat-item[data-idx="${idx}"]`);
+  const prev = item?.querySelector('.preview');
+  if (prev) prev.textContent = text.slice(0, 40);
 }
 
 async function loadAvatar(chat) {
@@ -210,7 +283,7 @@ async function loadAvatar(chat) {
 // 搜索
 el.searchInput.addEventListener('input', (e) => {
   const q = e.target.value.toLowerCase();
-  document.querySelectorAll('.chat-item').forEach(item => {
+  document.querySelectorAll('.chat-item').forEach((item) => {
     const name = item.querySelector('.name')?.textContent.toLowerCase() || '';
     item.style.display = name.includes(q) ? '' : 'none';
   });
@@ -221,8 +294,7 @@ async function openChat(chat, itemEl) {
   currentEntity = chat.entity;
   currentPeer = chat.dialog.inputPeer || chat.entity;
 
-  // UI 切换
-  document.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
+  document.querySelectorAll('.chat-item').forEach((i) => i.classList.remove('active'));
   if (itemEl) itemEl.classList.add('active');
 
   el.chatWindow.classList.remove('no-chat');
@@ -236,13 +308,11 @@ async function openChat(chat, itemEl) {
   el.chatAvatar.innerHTML = escapeHtml(chat.name.charAt(0).toUpperCase());
   el.chatAvatar.style.background = chat.color;
 
-  // 移动端
   if (window.innerWidth <= 768) {
     el.sidebar.classList.add('hidden-mobile');
     el.chatWindow.classList.add('active-mobile');
   }
 
-  // 加载头像
   try {
     const photos = await client.getProfilePhotos(chat.entity);
     if (photos.length > 0) {
@@ -254,7 +324,6 @@ async function openChat(chat, itemEl) {
     }
   } catch (e) {}
 
-  // 加载消息
   el.messages.innerHTML = '<div class="loading-spinner"></div>';
   try {
     const messages = await client.getMessages(chat.entity, { limit: 50 });
@@ -287,16 +356,16 @@ function renderMessage(msg, chat) {
   let mediaHtml = '';
   let textHtml = '';
 
-  // 文本
-  const text = msg.text || msg.message || '';
+  // 文本（优先用 message；text 可能是富文本数组，需要兜底）
+  const text = typeof msg.message === 'string'
+    ? msg.message
+    : (typeof msg.text === 'string' ? msg.text : '');
   if (text) textHtml = `<div class="text">${escapeHtml(text)}</div>`;
 
-  // 媒体
   if (msg.media) {
     mediaHtml = renderMedia(msg);
   }
 
-  // 发送者名称（群聊）
   let senderHtml = '';
   if (!isOut && chat.entity?.className === 'Channel' && msg.sender) {
     const senderName = msg.sender.firstName || msg.sender.title || '';
@@ -314,7 +383,6 @@ function renderMedia(msg) {
   const photo = msg.photo || media?.photo || (media?.webpage?.photo);
 
   if (photo) {
-    // 图片：加载缩略图
     const thumbId = `photo-${msg.id}`;
     loadThumb(photo, thumbId, msg, 'photo');
     return `<div class="msg-media" id="${thumbId}"><div style="width:300px;height:200px;background:#1a1a2e;display:flex;align-items:center;justify-content:center;border-radius:8px;">🖼️</div></div>`;
@@ -323,7 +391,7 @@ function renderMedia(msg) {
   if (doc) {
     const mime = doc.mimeType || '';
     const attrs = doc.attributes || [];
-    const fileNameAttr = attrs.find(a => a.fileName);
+    const fileNameAttr = attrs.find((a) => a.fileName);
     const fileName = fileNameAttr?.fileName || `file_${msg.id}`;
     const size = formatSize(doc.size || 0);
 
@@ -345,7 +413,6 @@ function renderMedia(msg) {
       return `<div class="msg-media" id="${iid}"><div style="width:300px;height:200px;background:#1a1a2e;display:flex;align-items:center;justify-content:center;border-radius:8px;">🖼️</div></div>`;
     }
 
-    // 其他文件
     const icon = mime === 'application/pdf' ? '📄' : mime.includes('zip') ? '🗜️' : '📦';
     return `<div class="msg-media"><div class="file-card">
       <div class="file-icon">${icon}</div>
@@ -368,7 +435,6 @@ async function loadThumb(media, elId, msg, type) {
         container.innerHTML = `<img src="${url}" alt="" loading="lazy" />`;
         container.querySelector('img')?.addEventListener('click', () => openPreview(url));
       }
-      // 异步加载全尺寸
       const fullBuf = await client.downloadMedia(msg);
       if (fullBuf && fullBuf.length > 0) {
         const fullUrl = URL.createObjectURL(new Blob([fullBuf], { type: 'image/jpeg' }));
@@ -382,14 +448,12 @@ async function loadThumb(media, elId, msg, type) {
 // 异步加载视频（内联播放）
 async function loadVideoThumb(doc, elId, msg) {
   try {
-    // 先加载缩略图
     const buf = await client.downloadMedia(msg, { thumb: 0 });
     if (buf && buf.length > 0) {
       const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
       const container = $(elId);
       if (container) {
         container.innerHTML = `<div style="position:relative;cursor:pointer;"><img src="${url}" style="width:300px;display:block;border-radius:8px;" /><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:48px;">▶️</div></div>`;
-        // 点击后加载完整视频内联播放
         container.querySelector('div')?.addEventListener('click', async () => {
           container.innerHTML = '<div style="padding:20px;">⏳ 加载视频...</div>';
           try {
@@ -445,7 +509,7 @@ el.messages.addEventListener('click', async (e) => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         const attrs = doc?.attributes || [];
-        const fa = attrs.find(x => x.fileName);
+        const fa = attrs.find((x) => x.fileName);
         a.href = url; a.download = fa?.fileName || `file_${msgId}`;
         a.click(); URL.revokeObjectURL(url);
       }
@@ -474,13 +538,13 @@ async function sendMessage() {
   el.msgInput.style.height = 'auto';
   el.sendBtn.disabled = true;
   try {
-    await client.sendMessage(currentEntity, { message: text });
-    // 重新加载消息
-    const messages = await client.getMessages(currentEntity, { limit: 1 });
-    if (messages[0]) {
-      renderMessage(messages[0], { entity: currentEntity });
+    const sent = await client.sendMessage(currentEntity, { message: text });
+    if (sent) {
+      renderMessage(sent, { entity: currentEntity });
       el.messages.scrollTop = el.messages.scrollHeight;
+      updateChatPreview(sent);
     }
+    saveSession();
   } catch (e) {
     alert('发送失败: ' + (e.message || e));
   }
@@ -500,7 +564,6 @@ el.fileInput.addEventListener('change', async () => {
     }
   }
   el.fileInput.value = '';
-  // 刷新消息
   const messages = await client.getMessages(currentEntity, { limit: 5 });
   el.messages.innerHTML = '';
   for (const msg of messages.reverse()) renderMessage(msg, { entity: currentEntity });
@@ -517,8 +580,7 @@ el.backBtn.addEventListener('click', () => {
 el.menuBtn.addEventListener('click', () => el.settingsPanel.classList.add('open'));
 el.settingsClose.addEventListener('click', () => el.settingsPanel.classList.remove('open'));
 
-// 背景设置
-document.querySelectorAll('.bg-option').forEach(opt => {
+document.querySelectorAll('.bg-option').forEach((opt) => {
   opt.addEventListener('click', () => {
     const bg = opt.dataset.bg;
     if (bg === 'default') {
@@ -583,7 +645,7 @@ function formatSize(bytes) {
 
 function escapeHtml(s) {
   if (!s) return '';
-  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function formatTime(ts) {
