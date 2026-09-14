@@ -52,7 +52,7 @@ const el = {
   viewerPrev: $('viewerPrev'), viewerNext: $('viewerNext'),
   details: $('details'), detailsPlaceholder: $('detailsPlaceholder'),
   detailsContent: $('detailsContent'), dAvatar: $('dAvatar'), dName: $('dName'),
-  dSub: $('dSub'), dAbout: $('dAbout'), dStat: $('dStat'),
+  dSub: $('dSub'), dAbout: $('dAbout'), dStat: $('dStat'), dStatMore: $('dStatMore'),
   chatMenu: $('chatMenu'), toast: $('toast'),
   mediaBrowser: $('mediaBrowser'), mediaBrowserGrid: $('mediaBrowserGrid'),
   mediaBrowserTitle: $('mediaBrowserTitle'), mediaBrowserClose: $('mediaBrowserClose'),
@@ -62,7 +62,7 @@ const el = {
 // ===== 状态 =====
 let client = null, currentEntity = null, currentDialogs = [];
 let currentMediaList = [], netdiskChannel = null, netdiskMediaList = [];
-let viewerList = null, viewerIndex = 0, viewerMode = 'chat';
+let viewerList = null, viewerIndex = 0, viewerMode = 'chat', viewerEntity = null;
 let selfMe = null;
 const senderCache = new Map();
 const mediaCache = new Map();   // 媒体缓存：key -> blob URL（缩略图 / 完整视频）
@@ -81,12 +81,26 @@ const ICONS = {
   view: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>',
   del: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
   file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>',
+  video: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="m10 9 5 3-5 3z"/></svg>',
+  image: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>',
+  audio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+  link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>',
+  users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
 };
 function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function getInitials(name){name=(name||'').trim();if(!name)return'?';const p=name.split(/\s+/);return (p[0]?.[0]||'')+(p[1]?.[0]||'');}
 const AVCOL=['#e17076','#7bc862','#65aadd','#a695e7','#ee7aae','#6ec9cb','#faa774'];
 function avatarBg(name){let h=0;for(const c of (name||''))h=(h*31+c.charCodeAt(0))>>>0;return AVCOL[h%AVCOL.length];}
 function fmtSize(b){if(!b)return'';if(b<1024)return b+'B';if(b<1048576)return (b/1024).toFixed(1)+'KB';if(b<1073741824)return (b/1048576).toFixed(1)+'MB';return (b/1073741824).toFixed(2)+'GB';}
+function getMediaKey(entity,msg,suffix){if(!entity||!msg)return null;return `${entity.id}:${msg.id}:${suffix}`;}
+function setThumbFallback(node,info){
+  if(!node||!info)return;
+  const map={video:ICONS.video,image:ICONS.image,gif:ICONS.image,audio:ICONS.audio,file:ICONS.file};
+  const icon=map[info.type]||ICONS.file;
+  node.innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--tg-sub);padding:10px;text-align:center;">${icon}<span style="font-size:11px;max-width:100%;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(info.name)}</span></div>`;
+  node.style.background='var(--tg-attach)';
+}
 function fmtTime(ts){if(!ts)return'';const d=new Date(ts*1000);const p=n=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
 function chatName(e){if(!e)return'';if(e.className==='User')return [e.firstName,e.lastName].filter(Boolean).join(' ')||e.username||e.phone||'用户';if(e.className==='Channel'||e.className==='Chat')return e.title||'';return'';}
 function isGroup(e){return e && (e.className==='Channel'||e.className==='Chat');}
@@ -182,25 +196,33 @@ function extractFirstFrame(buf,mime){
   });
 }
 async function loadThumb(node,msg){
-  const info=mediaInfo(msg);
-  const key=(node._cacheKey||(currentEntity?.id+':'+msg.id))+':thumb';
+  const info=mediaInfo(msg); if(!info)return;
+  const entity=(node._entity||currentEntity);
+  const key=(node._cacheKey||(getMediaKey(entity,msg,'thumb')));
   if(mediaCache.has(key)){applyThumb(node,mediaCache.get(key));return;}
   try{
     let url=null;
-    if(info&&info.type==='photo'){
+    if(info.type==='photo'){
       let buf=await client.downloadMedia(msg,{thumb:true});
       if(!buf||!buf.length)buf=await client.downloadMedia(msg);
       if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
-    }else if(info&&info.type==='video'){
+    }else if(info.type==='video'){
       let buf=await client.downloadMedia(msg,{thumb:true});   // 服务端缩略图即首帧
       if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
-      else{const fb=await client.downloadMedia(msg);if(fb&&fb.length)url=await extractFirstFrame(fb,info.mime);}
-    }else if(info&&info.type==='gif'){
+      else{
+        // 无服务端缩略图时：尝试下载完整视频提取首帧（限时 8 秒，失败则放弃）
+        try{
+          const fb=await Promise.race([client.downloadMedia(msg),new Promise((_,rej)=>setTimeout(()=>rej(new Error('thumb timeout')),8000))]);
+          if(fb&&fb.length)url=await extractFirstFrame(fb,info.mime);
+        }catch(e){}
+      }
+    }else if(info.type==='gif'){
       let buf=await client.downloadMedia(msg,{thumb:true});
       if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
     }
     if(url){mediaCache.set(key,url);applyThumb(node,url);}
-  }catch(e){}
+    else setThumbFallback(node,info);
+  }catch(e){setThumbFallback(node,info);}
 }
 
 // ===== 认证 =====
@@ -382,29 +404,36 @@ el.messages.addEventListener('click',async(e)=>{
   const actBtn=e.target.closest('.act-btn');
   if(actBtn){const id=parseInt(actBtn.closest('.msg').dataset.id);const msg=currentMediaList.find(m=>m.id===id)||await findMsg(id);if(!msg)return;
     const act=actBtn.dataset.act;
-    if(act==='view'){const idx=currentMediaList.findIndex(m=>m.id===id);if(idx>=0)openViewer(currentMediaList,idx,'chat');}
+    if(act==='view'){const idx=currentMediaList.findIndex(m=>m.id===id);if(idx>=0)openViewer(currentMediaList,idx,'chat',currentEntity);}
     else if(act==='download')downloadMedia(msg);
     else if(act==='share')shareMedia(msg);
     else if(act==='delete')deleteMessage(id);
     return;}
   const vbtn=e.target.closest('.vbtn');
-  if(vbtn){const host=vbtn.closest('.msg-media');const id=parseInt(vbtn.closest('.msg').dataset.id);const msg=currentMediaList.find(m=>m.id===id);if(msg)playVideo(host,msg);return;}
+  if(vbtn){const host=vbtn.closest('.msg-media');const id=parseInt(vbtn.closest('.msg').dataset.id);const msg=currentMediaList.find(m=>m.id===id);if(msg)playVideo(host,msg,currentEntity);return;}
   const play=e.target.closest('.play-overlay');
-  if(play){const host=play.closest('.msg-media');const id=parseInt(play.closest('.msg').dataset.id);const msg=currentMediaList.find(m=>m.id===id);if(msg)playVideo(host,msg);return;}
+  if(play){const host=play.closest('.msg-media');const id=parseInt(play.closest('.msg').dataset.id);const msg=currentMediaList.find(m=>m.id===id);if(msg)playVideo(host,msg,currentEntity);return;}
   const media=e.target.closest('.msg-media');
-  if(media&&!e.target.closest('.msg-actions')){const id=parseInt(media.closest('.msg').dataset.id);const idx=currentMediaList.findIndex(m=>m.id===id);if(idx>=0)openViewer(currentMediaList,idx,'chat');}
+  if(media&&!e.target.closest('.msg-actions')){const id=parseInt(media.closest('.msg').dataset.id);const idx=currentMediaList.findIndex(m=>m.id===id);if(idx>=0)openViewer(currentMediaList,idx,'chat',currentEntity);}
 });
 async function findMsg(id){try{const m=await client.getMessages(currentEntity,{ids:[id]});return m[0];}catch(e){return null;}}
 
 // 视频：保持卡片尺寸，圆形进度条随下载进度填充（带缓存，播放/下载过的直接复用）
-async function playVideo(host,msg){
+async function playVideo(host,msg,entity){
+  if(!entity)entity=currentEntity;
   lastFocusVideo=msg;   // 集中带宽加载本条视频
-  const key=currentEntity.id+':'+msg.id+':full';
-  const vbtn=host.querySelector('.vbtn');const ring=vbtn?host.querySelector('.cp'):null;
+  const key=getMediaKey(entity,msg,'full');
+  const vbtn=host.querySelector('.vbtn');
+  const ring=vbtn?host.querySelector('.cp'):null;
+  const sizeSpan=vbtn?host.querySelector('.vsize'):null;
   if(mediaCache.has(key)){const url=mediaCache.get(key);host.innerHTML=`<video controls autoplay src="${url}" style="width:100%;max-width:340px;border-radius:10px;background:#000;display:block;"></video>`;return;}
   const mime=(msg.video&&msg.video.mimeType)||(msg.document&&msg.document.mimeType)||'video/mp4';
   try{
-    const buf=await client.downloadMedia(msg,{progressCallback:p=>{if(ring)ring.style.strokeDashoffset=String(94.2*(1-Math.max(0,Math.min(1,p))));}});
+    const buf=await client.downloadMedia(msg,{progressCallback:p=>{
+      const pct=Math.max(0,Math.min(1,p));
+      if(ring)ring.style.strokeDashoffset=String(94.2*(1-pct));
+      if(sizeSpan)sizeSpan.textContent=Math.round(pct*100)+'%';
+    }});
     if(!buf||!buf.length){host.innerHTML='❌ 播放失败';return;}
     const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
     host.innerHTML=`<video controls autoplay src="${url}" style="width:100%;max-width:340px;border-radius:10px;background:#000;display:block;"></video>`;
@@ -487,25 +516,25 @@ async function shareMedia(msg){
 }
 
 // ===== 媒体查看器 =====
-function openViewer(list,idx,mode){viewerList=list;viewerIndex=idx;viewerMode=mode;renderViewer();el.viewer.classList.add('open');}
+function openViewer(list,idx,mode,entity){viewerList=list;viewerIndex=idx;viewerMode=mode;viewerEntity=entity||currentEntity;renderViewer();el.viewer.classList.add('open');}
 function renderViewer(){
   const msg=viewerList[viewerIndex];if(!msg){closeViewer();return;}
-  const info=mediaInfo(msg);const key=(viewerMode==='netdisk'?netdiskChannel.id:(viewerMode==='browser'?currentEntity?.id:currentEntity.id))+':'+msg.id;
+  const info=mediaInfo(msg);const key=getMediaKey(viewerEntity,msg,'full');
   el.viewerVideo.style.display='none';el.viewerMedia.style.display='none';el.viewerCap.textContent='';
   if(info&&(info.type==='video'||info.type==='gif')){
     el.viewerMedia.style.display='none';el.viewerVideo.style.display='block';
-    if(mediaCache.has(key+':full')){el.viewerVideo.src=mediaCache.get(key+':full');el.viewerVideo.play();return;}
+    if(mediaCache.has(key)){el.viewerVideo.src=mediaCache.get(key);el.viewerVideo.play();return;}
     el.viewerVideo.innerHTML='<div class="progress" style="width:300px"><i></i></div>';
     client.downloadMedia(msg,{progressCallback:p=>{const b=el.viewerVideo.querySelector('.progress > i');if(b)b.style.width=Math.round(p*100)+'%';}}).then(buf=>{
       if(!buf||!buf.length){el.viewerVideo.innerHTML='❌';return;}
       const mime=(msg.video&&msg.video.mimeType)||(msg.document&&msg.document.mimeType)||'video/mp4';
-      const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key+':full',url);
+      const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
       el.viewerVideo.src=url;el.viewerVideo.play();
     }).catch(()=>{el.viewerVideo.innerHTML='❌';});
   }else if(info&&info.type==='image'){
     el.viewerMedia.style.display='block';
-    if(mediaCache.has(key+':full')){el.viewerMedia.src=mediaCache.get(key+':full');return;}
-    client.downloadMedia(msg).then(buf=>{if(buf&&buf.length){const url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));mediaCache.set(key+':full',url);el.viewerMedia.src=url;}}).catch(()=>{});
+    if(mediaCache.has(key)){el.viewerMedia.src=mediaCache.get(key);return;}
+    client.downloadMedia(msg).then(buf=>{if(buf&&buf.length){const url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));mediaCache.set(key,url);el.viewerMedia.src=url;}}).catch(()=>{});
   }else{
     el.viewerMedia.style.display='block';el.viewerMedia.alt='[文件] '+(info?info.name:'');el.viewerCap.textContent=(info?info.name:'')+'  ·  '+fmtSize(info?info.size:0);
   }
@@ -544,20 +573,20 @@ async function openMediaBrowser(type){
         const row=document.createElement('div');row.className='nk-row';
         const th=document.createElement('div');th.className='nk-thumb sm';
         if(info.type==='video')th.classList.add('play');else if(info.type!=='photo'&&info.type!=='gif')th.innerHTML=ICONS.file;
-        th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;
+        th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;th._entity=currentEntity;
         const meta=document.createElement('div');meta.className='nk-meta';
         meta.innerHTML=`<div class="nk-name">${escapeHtml(info.name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
-        row.append(th,meta);row.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser');};
+        row.append(th,meta);row.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser',currentEntity);};
         el.mediaBrowserGrid.appendChild(row);
         if(th._thumbMsg)loadThumb(th,msg);
       }else{
         const card=document.createElement('div');card.className='mb-card';
         const th=document.createElement('div');th.className='mb-thumb';
         if(info.type==='video'||info.type==='gif')th.classList.add('play');
-        th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;
+        th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;th._entity=currentEntity;
         const nm=document.createElement('div');nm.className='nk-name';nm.textContent=info.name;
         card.append(th,nm);
-        card.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser');};
+        card.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser',currentEntity);};
         el.mediaBrowserGrid.appendChild(card);
         if(th._thumbMsg)loadThumb(th,msg);
       }
@@ -572,31 +601,70 @@ async function loadDetails(entity){
   el.dSub.textContent=entity.className==='User'?(entity.username?('@'+entity.username):(entity.phone||'')):(entity.className==='Channel'?(entity.megaGroup?'群组':'频道'):'群组');
   await loadAvatarInto(el.dAvatar,entity);
   el.dAbout.textContent='加载中…';el.dStat.innerHTML='';
+  let members=0;
   try{
-    let about='',stat='';
+    let about='';
     if(entity.className==='User'){const r=await client.invoke(new Api.users.GetFullUser({id:await client.getInputEntity(entity)}));about=r.fullUser.about||'';}
-    else{const r=await client.invoke(new Api.channels.GetFullChannel({channel:await client.getInputEntity(entity)}));about=r.fullChat.about||'';const pc=r.fullChat.participantsCount;stat=`<div><b>${pc||'—'}</b><span>成员</span></div>`;}
-    el.dAbout.textContent=about||'暂无简介';if(stat)el.dStat.innerHTML=stat;
+    else{const r=await client.invoke(new Api.channels.GetFullChannel({channel:await client.getInputEntity(entity)}));about=r.fullChat.about||'';members=r.fullChat.participantsCount||0;}
+    el.dAbout.textContent=about||'暂无简介';
   }catch(e){el.dAbout.textContent='';}
-  loadMediaStats(entity);
+  loadMediaStats(entity,false,members);
 }
-async function loadMediaStats(entity){
+let mediaStatsState={video:{c:0,s:0},image:{c:0,s:0},gif:{c:0,s:0},audio:{c:0,s:0},file:{c:0,s:0},link:0,total:0,lastId:null,loading:false,entity:null,members:0};
+async function loadMediaStats(entity,loadMore=false,members=0){
+  if(!loadMore){
+    mediaStatsState={video:{c:0,s:0},image:{c:0,s:0},gif:{c:0,s:0},audio:{c:0,s:0},file:{c:0,s:0},link:0,total:0,lastId:null,loading:false,entity,members};
+    el.dStat.innerHTML='<div class="stat-row"><div class="stat-label">'+ICONS.refresh+'<span>正在统计…</span></div><div class="stat-val">—</div></div>';
+    el.dStatMore.innerHTML='';el.dStatMore.style.display='none';
+  }
+  if(mediaStatsState.loading||mediaStatsState.total>=2000)return;
+  mediaStatsState.loading=true;
   try{
-    const msgs=await client.getMessages(entity,{limit:100});
-    let video=0,image=0,gif=0,file=0,audio=0,link=0;
-    for(const m of msgs){const i=mediaInfo(m);if(!i)continue;
-      if(i.type==='video')video++;else if(i.type==='image')image++;else if(i.type==='gif')gif++;else if(i.type==='audio')audio++;else if(i.type==='file')file++;
-      if(m.message&&/https?:\/\//.test(m.message))link++;
+    const opts={limit:100};if(mediaStatsState.lastId)opts.offsetId=mediaStatsState.lastId;
+    const msgs=await client.getMessages(entity,opts);
+    if(!msgs||!msgs.length){renderMediaStats(true);mediaStatsState.loading=false;return;}
+    for(const m of msgs){
+      const i=mediaInfo(m);
+      if(i){mediaStatsState.total++;const st=mediaStatsState[i.type];if(st){st.c++;st.s+=i.size||0;}}
+      if(m.message&&/https?:\/\//.test(m.message))mediaStatsState.link++;
     }
-    el.dStat.innerHTML+=`
-      <div class="clickable" data-t="video"><b>${video}</b><span>视频</span></div>
-      <div class="clickable" data-t="image"><b>${image}</b><span>图片</span></div>
-      <div><b>${gif}</b><span>GIF</span></div>
-      <div><b>${file}</b><span>文件</span></div>
-      <div><b>${audio}</b><span>音频</span></div>
-      <div><b>${link}</b><span>链接</span></div>`;
-    el.dStat.querySelectorAll('.clickable').forEach(d=>d.onclick=()=>openMediaBrowser(d.dataset.t));
+    mediaStatsState.lastId=msgs[msgs.length-1].id;
+    renderMediaStats(false);
+    // 自动继续统计，直到 2000 条或用户点击停止
+    if(mediaStatsState.total<2000){setTimeout(()=>loadMediaStats(entity,false),30);}
   }catch(e){}
+  mediaStatsState.loading=false;
+}
+function renderMediaStats(done){
+  const s=mediaStatsState;
+  const rows=[
+    ...(s.members?[{k:'members',l:'成员',icon:ICONS.users,clickable:false}]:[]),
+    {k:'video',l:'视频',icon:ICONS.video,clickable:true},
+    {k:'image',l:'图片',icon:ICONS.image,clickable:true},
+    {k:'gif',l:'GIF',icon:ICONS.image,clickable:false},
+    {k:'audio',l:'音频',icon:ICONS.audio,clickable:false},
+    {k:'file',l:'文件',icon:ICONS.file,clickable:false},
+    {k:'link',l:'链接',icon:ICONS.link,clickable:false},
+  ];
+  el.dStat.innerHTML=rows.map(r=>{
+    let val,size='';
+    if(r.k==='members'){val=s.members;}
+    else if(r.k==='link'){val=s.link;}
+    else{val=s[r.k].c;size=fmtSize(s[r.k].s);}
+    const cls=r.clickable?'stat-row clickable':'stat-row';
+    const data=r.clickable?`data-t="${r.k}"`:'',
+          sizeHtml=size?`<div class="stat-sub">${size}</div>`:'';
+    return `<div class="${cls}" ${data}><div class="stat-label">${r.icon}<span>${r.l}</span></div><div style="text-align:right;"><div class="stat-val">${val}</div>${sizeHtml}</div></div>`;
+  }).join('');
+  el.dStat.querySelectorAll('.clickable').forEach(d=>d.onclick=()=>openMediaBrowser(d.dataset.t));
+  if(done||s.total>=2000){
+    el.dStatMore.innerHTML=`<span class="stat-sub">已统计 ${s.total} 条消息${s.total>=2000?'（已达上限）':''}</span>`;
+    el.dStatMore.style.display='block';
+  }else{
+    el.dStatMore.innerHTML=`<span class="stat-sub">已统计 ${s.total} 条… <button id="btnLoadMoreStats" style="color:var(--tg-blue);font-weight:600;">立即继续</button></span>`;
+    el.dStatMore.style.display='block';
+    const btn=$('btnLoadMoreStats');if(btn)btn.onclick=()=>loadMediaStats(mediaStatsState.entity,true);
+  }
 }
 
 // ===== 聊天菜单：加入 / 退出 / 删除 / 详情 =====
@@ -665,21 +733,21 @@ function renderNetdisk(cat){
     if(netdiskView==='list'){
       const row=document.createElement('div');row.className='nk-row';
       const th=document.createElement('div');th.className='nk-thumb sm';
-      th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;
+      th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
       if(info.type==='video')th.classList.add('play');else if(info.type!=='photo'&&info.type!=='gif')th.innerHTML=ICONS.file;
       const meta=document.createElement('div');meta.className='nk-meta';
       meta.innerHTML=`<div class="nk-name">${escapeHtml(info.name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
-      row.append(th,meta);row.onclick=()=>openViewer(list,i,'netdisk');
+      row.append(th,meta);row.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
       el.netdiskGrid.appendChild(row);
       if(th._thumbMsg)loadThumb(th,msg);   // 立即加载，确保移动端也能显示
     }else{
       const card=document.createElement('div');card.className='nk-card';
       const nameBar=document.createElement('div');nameBar.className='nk-name-bar';nameBar.textContent=chName;
       const th=document.createElement('div');th.className='nk-thumb';
-      th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;
+      th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
       if(info.type==='video')th.classList.add('play');else if(info.type!=='photo'&&info.type!=='gif')th.innerHTML=ICONS.file;
       const nm=document.createElement('div');nm.className='nk-name';nm.textContent=info.name;
-      card.append(nameBar,th,nm);card.onclick=()=>openViewer(list,i,'netdisk');
+      card.append(nameBar,th,nm);card.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
       el.netdiskGrid.appendChild(card);
       if(th._thumbMsg)loadThumb(th,msg);
     }
