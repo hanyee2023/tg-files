@@ -1,84 +1,18 @@
-// 必须最先 import proxy.js，确保 WebSocket/fetch/XHR 在 GramJS 加载前被 patch
-import './proxy.js';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram/tl/api';
 
-// ===== 配置（优先 localStorage，其次环境变量）=====
-function getConfig() {
-  return {
-    apiId: parseInt(localStorage.getItem('tg_api_id') || import.meta.env.VITE_API_ID || '0'),
-    apiHash: localStorage.getItem('tg_api_hash') || import.meta.env.VITE_API_HASH || '',
-    proxyDomain: localStorage.getItem('tg_proxy') || import.meta.env.VITE_PROXY_DOMAIN || '',
-  };
-}
-let CFG = getConfig();
-const PROXY_DOMAIN = CFG.proxyDomain; // 用于显示
+// ===== 配置 =====
+const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
+const API_HASH = import.meta.env.VITE_API_HASH || '';
+const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
 
-// ===== 动态代理 patch（localStorage 配置的代理，在运行时 patch）=====
-let proxyPatched = false;
-function applyRuntimeProxy() {
-  if (proxyPatched || !CFG.proxyDomain) return;
-  proxyPatched = true;
-
-  function shouldRewrite(urlStr) {
-    try {
-      const u = new URL(urlStr, location.href);
-      return u.hostname.endsWith('.telegram.org') && u.hostname !== CFG.proxyDomain;
-    } catch (e) { return false; }
-  }
-
-  // Patch WebSocket
+// ===== 代理 patch =====
+if (PROXY_DOMAIN) {
   const OrigWS = self.WebSocket;
   self.WebSocket = function (url, protocols) {
-    if (typeof url === 'string' && shouldRewrite(url)) {
-      try {
-        const u = new URL(url);
-        const cleanHost = u.hostname;
-        const newUrl = `wss://${CFG.proxyDomain}/${cleanHost}${u.pathname}${u.search}`;
-        console.log('[Proxy] WS rewrite ->', newUrl);
-        // 不传 protocols：CF Workers WebSocketPair 不支持协议协商
-        const realWs = new OrigWS(newUrl);
-        
-        // 创建代理对象，拦截 Worker 诊断字符串消息，只转发二进制数据给 GramJS
-        const proxyWs = new EventTarget();
-        for (const p of ['readyState','bufferedAmount','extensions','protocol','url']) {
-          Object.defineProperty(proxyWs, p, { get: () => realWs[p] });
-        }
-        Object.defineProperty(proxyWs, 'binaryType', {
-          get: () => realWs.binaryType, set: (v) => { realWs.binaryType = v; }
-        });
-        proxyWs.send = (data) => realWs.send(data);
-        proxyWs.close = (code, reason) => realWs.close(code, reason);
-        
-        for (const type of ['open','message','close','error']) {
-          realWs.addEventListener(type, (ev) => {
-            let newEv;
-            if (type === 'message') {
-              if (typeof ev.data === 'string' && ev.data.charAt(0) === '{') {
-                try {
-                  const d = JSON.parse(ev.data);
-                  if (d.error) console.error('[Proxy] Worker error:', d);
-                  else if (d.status) console.log('[Proxy] Worker status:', d.status, d);
-                } catch(e) { console.log('[Proxy] Worker msg:', ev.data); }
-                return;
-              }
-              newEv = new MessageEvent('message', { data: ev.data });
-            } else if (type === 'close') {
-              newEv = new CloseEvent('close', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean });
-            } else { newEv = new Event(type); }
-            proxyWs.dispatchEvent(newEv);
-            const h = proxyWs['on' + type];
-            if (typeof h === 'function') h(newEv);
-          });
-        }
-        console.log('[Proxy] WS connected');
-        realWs.addEventListener('error', (e) => console.error('[Proxy] WS error', e));
-        realWs.addEventListener('close', (e) => console.log('[Proxy] WS closed', e.code, e.reason));
-        return proxyWs;
-      } catch (e) {
-        console.error('[Proxy] WS rewrite error', e);
-      }
+    if (typeof url === 'string' && url.includes('telegram.org')) {
+      try { const u = new URL(url); url = `wss://${PROXY_DOMAIN}/${u.hostname}${u.pathname}`; } catch (e) {}
     }
     return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
   };
@@ -87,304 +21,143 @@ function applyRuntimeProxy() {
   self.WebSocket.OPEN = OrigWS.OPEN;
   self.WebSocket.CLOSING = OrigWS.CLOSING;
   self.WebSocket.CLOSED = OrigWS.CLOSED;
-
-  // Patch fetch
   const origFetch = self.fetch;
   self.fetch = function (input, init) {
     let s = typeof input === 'string' ? input : (input?.url || '');
-    if (shouldRewrite(s)) {
-      try {
-        const u = new URL(s, location.href);
-        const n = `https://${CFG.proxyDomain}/${u.hostname}${u.pathname}${u.search}`;
-        input = typeof input === 'string' ? n : new Request(n, input);
-      } catch (e) {}
+    if (s.includes('telegram.org')) {
+      try { const u = new URL(s); const n = `https://${PROXY_DOMAIN}/${u.hostname}${u.pathname}${u.search}`;
+        input = typeof input === 'string' ? n : new Request(n, input); } catch (e) {}
     }
     return origFetch.call(self, input, init);
   };
-
-  // Patch XHR
-  const OrigXHR = self.XMLHttpRequest;
-  self.XMLHttpRequest = function () {
-    const xhr = new OrigXHR();
-    const origOpen = xhr.open;
-    xhr.open = function (method, url, async, user, password) {
-      if (shouldRewrite(url)) {
-        try {
-          const u = new URL(url, location.href);
-          url = `https://${CFG.proxyDomain}/${u.hostname}${u.pathname}${u.search}`;
-        } catch (e) {}
-      }
-      return origOpen.call(xhr, method, url, async !== false, user, password);
-    };
-    return xhr;
-  };
-  self.XMLHttpRequest.prototype = OrigXHR.prototype;
-  self.XMLHttpRequest.DONE = OrigXHR.DONE;
-  self.XMLHttpRequest.HEADERS_RECEIVED = OrigXHR.HEADERS_RECEIVED;
-  self.XMLHttpRequest.LOADING = OrigXHR.LOADING;
-  self.XMLHttpRequest.OPENED = OrigXHR.OPENED;
-  self.XMLHttpRequest.UNSENT = OrigXHR.UNSENT;
-}
-
-// ===== 超时工具 =====
-const CONNECT_TIMEOUT = 15000;
-function connectWithTimeout(client) {
-  return Promise.race([
-    client.connect(),
-    new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('连接超时：无法连接到 Telegram 服务器，请检查代理是否正确配置')), CONNECT_TIMEOUT)
-    ),
-  ]);
-}
-function withTimeout(promise, ms, msg) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error(msg || '请求超时')), ms)),
-  ]);
 }
 
 // ===== 状态 =====
 let client = null;
-let me = null;
 let phoneCodeHash = '';
 let currentEntity = null;
 let currentPeer = null;
 let allChats = [];
 let loginStep = 'phone';
-let driveChannelId = localStorage.getItem('drive_channel_id') || '';
-let currentMode = 'drive';
-let splashTimer = null;
 
 const COLORS = ['#e17076','#7bc862','#65aadd','#a695c7','#ee7aae','#6ec9cb','#faa774','#5b7b9a'];
 
 // ===== DOM 引用 =====
 const $ = id => document.getElementById(id);
+const el = {
+  loginView: $('login-view'), appView: $('app-view'),
+  phone: $('phone'), code: $('code'), codeRow: $('code-row'),
+  password: $('password'), passwordRow: $('password-row'),
+  mainBtn: $('main-btn'), loginStatus: $('login-status'),
+  sidebar: $('sidebar'), chatList: $('chat-list'), searchInput: $('search-input'),
+  chatWindow: $('chat-window'), chatHeader: $('chat-header'), chatAvatar: $('chat-avatar'),
+  chatName: $('chat-name'), chatStatus: $('chat-status'),
+  messagesWrap: $('messages-wrap'), messages: $('messages'), messagesBg: $('messages-bg'),
+  inputBar: $('input-bar'), msgInput: $('msg-input'), sendBtn: $('send-btn'),
+  attachBtn: $('attach-btn'), fileInput: $('file-input'),
+  menuBtn: $('menu-btn'), settingsPanel: $('settings-panel'), settingsClose: $('settings-close'),
+  backBtn: $('back-btn'), logoutBtn: $('logout-btn'),
+  bgFileInput: $('bg-file-input'), bgOpacity: $('bg-opacity'),
+  previewOverlay: $('preview-overlay'), previewImg: $('preview-img'), previewClose: $('preview-close'),
+};
 
 // ===== 初始化 =====
 async function init() {
-  // 点击 splash 跳过
-  $('splash-view')?.addEventListener('click', () => {
-    if (splashTimer) { clearTimeout(splashTimer); splashTimer = null; }
-    $('splash-view').classList.remove('show');
-  });
-
-  // 安全超时：8 秒后无论如何都显示登录页
-  splashTimer = setTimeout(() => {
-    if (!$('app-view')?.classList.contains('active')) {
-      $('splash-view')?.classList.remove('show');
-      showLoginPage();
-      $('login-status').textContent = '连接超时，请检查代理配置后重试';
-    }
-  }, 30000);
-
-  // 检查配置
-  CFG = getConfig();
-  if (!CFG.apiId || !CFG.apiHash) {
-    $('splash-view')?.classList.remove('show');
-    showLoginPage();
-    $('login-status').className = 'login-status error';
-    $('login-status').innerHTML = '请先点击右上角 <svg class="icon icon-sm" style="width:14px;height:14px;vertical-align:middle;display:inline-block;" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> 配置 API 信息';
+  if (!API_ID || !API_HASH) {
+    el.loginStatus.className = 'login-status error';
+    el.loginStatus.textContent = '请设置环境变量';
     return;
   }
-
-  // 应用运行时代理（如果 localStorage 有配置且 proxy.js 没有生效）
-  applyRuntimeProxy();
-
   const saved = localStorage.getItem('tg_session');
   if (saved) {
-    $('splash-view')?.classList.add('show');
-    setSplashStatus('正在连接 Telegram...');
-
-    if (splashTimer) { clearTimeout(splashTimer); splashTimer = null; }
-    splashTimer = setTimeout(() => {
-      console.log('[Splash] 超时，跳转登录页');
-      try { client?.disconnect(); } catch(e) {}
-      client = null;
-      localStorage.removeItem('tg_session');
-      $('splash-view')?.classList.remove('show');
-      showLoginPage();
-      $('login-status').textContent = '连接超时，请检查代理后重新登录';
-    }, 15000);
-
     try {
-      console.log('[Init] 创建 client, API_ID:', CFG.apiId, 'PROXY:', CFG.proxyDomain || '(直连)');
-      client = new TelegramClient(new StringSession(saved), CFG.apiId, CFG.apiHash, { connectionRetries: 5, retryDelay: 2000 });
-      await connectWithTimeout(client);
-      me = await withTimeout(client.getMe(), 10000, '获取用户信息超时');
-      if (splashTimer) { clearTimeout(splashTimer); splashTimer = null; }
+      client = new TelegramClient(new StringSession(saved), API_ID, API_HASH, { connectionRetries: 5, retryDelay: 2000 });
+      await client.connect();
+      await client.getMe();
       enterApp();
       return;
-    } catch (e) {
-      console.error('[Init] 连接失败:', e.message);
-      if (splashTimer) { clearTimeout(splashTimer); splashTimer = null; }
-      try { client?.disconnect(); } catch(e2) {}
-      client = null;
-      localStorage.removeItem('tg_session');
-    }
+    } catch (e) { console.log('Session expired', e); }
   }
-
-  $('splash-view')?.classList.remove('show');
-  showLoginPage();
-  $('login-status').textContent = '请输入手机号登录';
-  if (CFG.proxyDomain) {
-    $('login-status').innerHTML += `<div style="font-size:12px;color:#51cf66;margin-top:8px;">代理: ${CFG.proxyDomain}</div>`;
-  }
-}
-
-function setSplashStatus(text) {
-  const el = $('splash-status');
-  if (el) el.textContent = text;
-}
-
-function showLoginPage() {
-  $('splash-view')?.classList.remove('show');
-  $('login-view').style.display = 'flex';
+  el.loginStatus.textContent = '请输入手机号登录';
 }
 
 // ===== 登录流程 =====
-$('main-btn').addEventListener('click', async () => {
+el.mainBtn.addEventListener('click', async () => {
   if (loginStep === 'phone') {
-    const phone = $('phone').value.trim();
+    const phone = el.phone.value.trim();
     if (!phone) return;
-    CFG = getConfig();
-    if (!CFG.apiId || !CFG.apiHash) {
-      $('login-status').className = 'login-status error';
-      $('login-status').textContent = '请先点击右上角设置图标配置 API ID 和 API Hash';
-      return;
-    }
-    applyRuntimeProxy();
-
-    $('main-btn').disabled = true;
-    $('main-btn').textContent = '连接中...';
-    $('login-status').className = 'login-status';
-    $('login-status').textContent = '正在连接 Telegram...';
+    el.mainBtn.disabled = true; el.mainBtn.textContent = '连接中...';
+    el.loginStatus.textContent = '';
     try {
-      try { client?.disconnect(); } catch(e) {}
-      client = new TelegramClient(new StringSession(''), CFG.apiId, CFG.apiHash, { connectionRetries: 5, retryDelay: 2000 });
-
-      await connectWithTimeout(client);
-
-      $('login-status').textContent = '正在发送验证码...';
-      const r = await withTimeout(
-        client.sendCode({ apiId: CFG.apiId, apiHash: CFG.apiHash }, phone),
-        20000,
-        '发送验证码超时，请检查代理配置'
-      );
-      phoneCodeHash = r.phoneCodeHash;
-      $('code-row').classList.remove('hidden');
-      $('main-btn').textContent = '登录';
-      $('main-btn').disabled = false;
-      loginStep = 'code';
-      $('login-status').className = 'login-status success';
-      $('login-status').textContent = '验证码已发送到 Telegram';
-    } catch (e) {
-      console.error('Login error:', e);
-      $('login-status').className = 'login-status error';
-      let msg = e.message || String(e);
-      if (msg.includes('超时') || msg.includes('timeout') || msg.includes('connect') || msg.includes('Connection')) {
-        msg = `无法连接 Telegram。原因：${e.message}。请检查代理 Worker 是否正确部署。`;
+      if (!client) {
+        client = new TelegramClient(new StringSession(''), API_ID, API_HASH, { connectionRetries: 5, retryDelay: 2000 });
+        await client.connect();
       }
-      $('login-status').textContent = msg;
-      $('main-btn').disabled = false;
-      $('main-btn').textContent = '重新发送';
-      try { client?.disconnect(); client = null; } catch(_) {}
+      const r = await client.sendCode({ apiId: API_ID, apiHash: API_HASH }, phone);
+      phoneCodeHash = r.phoneCodeHash;
+      el.codeRow.classList.remove('hidden');
+      el.mainBtn.textContent = '登录';
+      el.mainBtn.disabled = false;
+      loginStep = 'code';
+      el.loginStatus.className = 'login-status success';
+      el.loginStatus.textContent = '验证码已发送';
+    } catch (e) {
+      el.loginStatus.className = 'login-status error';
+      el.loginStatus.textContent = e.message || String(e);
+      el.mainBtn.disabled = false; el.mainBtn.textContent = '发送验证码';
     }
   } else if (loginStep === 'code') {
-    const code = $('code').value.trim();
-    const phone = $('phone').value.trim();
+    const code = el.code.value.trim();
+    const phone = el.phone.value.trim();
     if (!code) return;
-    $('main-btn').disabled = true;
-    $('main-btn').textContent = '验证中...';
+    el.mainBtn.disabled = true;
     try {
-      await withTimeout(
-        client.invoke(new Api.auth.SignIn({ phoneNumber: phone, phoneCodeHash, phoneCode: code })),
-        20000,
-        '登录超时，请重试'
-      );
-      me = await client.getMe();
+      await client.invoke(new Api.auth.SignIn({ phoneNumber: phone, phoneCodeHash, phoneCode: code }));
       localStorage.setItem('tg_session', client.session.save());
       enterApp();
     } catch (e) {
       if (e.message?.includes('SESSION_PASSWORD_NEEDED')) {
-        $('password-row').classList.remove('hidden');
-        $('main-btn').textContent = '确认';
+        el.passwordRow.classList.remove('hidden');
+        el.mainBtn.textContent = '确认';
         loginStep = 'password';
-        $('login-status').className = 'login-status';
-        $('login-status').textContent = '请输入两步验证密码';
+        el.loginStatus.className = 'login-status';
+        el.loginStatus.textContent = '请输入两步验证密码';
       } else {
-        $('login-status').className = 'login-status error';
-        $('login-status').textContent = e.message || String(e);
+        el.loginStatus.className = 'login-status error';
+        el.loginStatus.textContent = e.message || String(e);
       }
-      $('main-btn').disabled = false;
+      el.mainBtn.disabled = false;
     }
   } else if (loginStep === 'password') {
-    const pwd = $('password').value;
+    const pwd = el.password.value;
     if (!pwd) return;
-    $('main-btn').disabled = true;
-    $('main-btn').textContent = '验证中...';
+    el.mainBtn.disabled = true;
     try {
-      await withTimeout(client.signInWithPassword({ password: pwd }), 20000, '验证超时');
-      me = await client.getMe();
+      await client.signInWithPassword({ password: pwd });
       localStorage.setItem('tg_session', client.session.save());
       enterApp();
     } catch (e) {
-      $('login-status').className = 'login-status error';
-      $('login-status').textContent = e.message || String(e);
-      $('main-btn').disabled = false;
+      el.loginStatus.className = 'login-status error';
+      el.loginStatus.textContent = e.message || String(e);
+      el.mainBtn.disabled = false;
     }
   }
 });
 
-// ===== 进入应用 =====
 function enterApp() {
-  $('login-view').style.display = 'none';
-  $('splash-view')?.classList.remove('show');
-  $('app-view').classList.add('active');
-  loadUserInfo();
+  el.loginView.style.display = 'none';
+  el.appView.classList.add('active');
   loadChatList();
-  if (driveChannelId) {
-    setTimeout(() => openDriveChannel(), 300);
-  }
-}
-
-// ===== 用户信息 =====
-async function loadUserInfo() {
-  if (!me) return;
-  const name = (me.firstName || '') + (me.lastName ? ' ' + me.lastName : '');
-  const initial = (me.firstName || '?').charAt(0).toUpperCase();
-  const phoneStr = '+' + me.phone;
-
-  $('settings-name') && ($('settings-name').textContent = name);
-  $('settings-phone') && ($('settings-phone').textContent = phoneStr);
-
-  const avatars = document.querySelectorAll('.user-avatar');
-  avatars.forEach(a => { a.innerHTML = initial; a.style.background = COLORS[0]; });
-
-  try {
-    const photos = await client.getProfilePhotos(me);
-    if (photos.length > 0) {
-      const buf = await client.downloadMedia(photos[0], { thumb: 0 });
-      if (buf && buf.length > 0) {
-        const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
-        avatars.forEach(a => { a.innerHTML = `<img src="${url}" alt="" />`; });
-        const setAv = $('settings-avatar');
-        if (setAv) { setAv.innerHTML = `<img src="${url}" alt="" />`; setAv.style.background = 'transparent'; }
-      }
-    }
-  } catch (e) { console.log('avatar error', e); }
-
-  updateDriveBanner();
+  loadBackground();
 }
 
 // ===== 聊天列表 =====
 async function loadChatList() {
-  const list = $('chat-list');
-  if (!list) return;
-  list.innerHTML = '<div style="text-align:center;padding:20px;color:#708499;">加载中...</div>';
+  el.chatList.innerHTML = '<div style="text-align:center;padding:20px;color:#708499;">加载中...</div>';
   try {
     const dialogs = await client.getDialogs({ limit: 100 });
     allChats = [];
-    list.innerHTML = '';
+    el.chatList.innerHTML = '';
     for (let i = 0; i < dialogs.length; i++) {
       const d = dialogs[i];
       const entity = d.entity;
@@ -396,358 +169,436 @@ async function loadChatList() {
       const item = document.createElement('div');
       item.className = 'chat-item';
       item.dataset.idx = i;
-      const isDrive = chat.id === driveChannelId;
       item.innerHTML = `
         <div class="avatar" style="background:${color}">${escapeHtml(name.charAt(0).toUpperCase())}</div>
         <div class="chat-info">
-          <div class="chat-name">${escapeHtml(name)}</div>
-          <div class="chat-preview">${escapeHtml(preview.slice(0, 40))}</div>
+          <div class="name">${escapeHtml(name)}</div>
+          <div class="preview">${escapeHtml(preview.slice(0, 40))}</div>
         </div>
-        ${isDrive ? '<div class="pin-icon" title="网盘频道">⭐</div>' : ''}
       `;
       item.addEventListener('click', () => openChat(chat, item));
-      list.appendChild(item);
+      el.chatList.appendChild(item);
     }
+    // 异步加载头像
     for (let i = 0; i < allChats.length; i++) {
-      loadChatAvatar(allChats[i], i);
+      loadAvatar(allChats[i]);
     }
   } catch (e) {
-    list.innerHTML = `<div style="padding:20px;color:#ff6b6b;">错误: ${escapeHtml(e.message)}</div>`;
+    el.chatList.innerHTML = `<div style="padding:20px;color:#ff6b6b;">错误: ${escapeHtml(e.message)}</div>`;
   }
 }
 
-async function loadChatAvatar(chat, idx) {
+async function loadAvatar(chat) {
   try {
     const photos = await client.getProfilePhotos(chat.entity);
     if (photos.length > 0) {
       const buf = await client.downloadMedia(photos[0], { thumb: 0 });
       if (buf && buf.length > 0) {
         const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
-        const items = document.querySelectorAll('.chat-item');
-        const item = items[idx];
-        if (item) { const av = item.querySelector('.avatar'); if (av) av.innerHTML = `<img src="${url}" alt="" />`; }
+        const items = el.chatList.querySelectorAll('.chat-item');
+        for (const item of items) {
+          if (item.dataset.idx == allChats.indexOf(chat)) {
+            const av = item.querySelector('.avatar');
+            if (av) av.innerHTML = `<img src="${url}" alt="" />`;
+          }
+        }
       }
     }
   } catch (e) {}
 }
 
 // 搜索
-$('search-input')?.addEventListener('input', (e) => {
+el.searchInput.addEventListener('input', (e) => {
   const q = e.target.value.toLowerCase();
-  document.querySelectorAll('.chat-item').forEach((item, i) => {
-    const chat = allChats[i];
-    const name = chat?.name?.toLowerCase() || '';
+  document.querySelectorAll('.chat-item').forEach(item => {
+    const name = item.querySelector('.name')?.textContent.toLowerCase() || '';
     item.style.display = name.includes(q) ? '' : 'none';
   });
 });
 
-// ===== 模式切换 =====
-document.querySelectorAll('.mode-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    currentMode = tab.dataset.mode;
-    if (currentMode === 'drive') {
-      $('input-bar')?.classList.add('hidden');
-      if (driveChannelId) { openDriveChannel(); }
-      else { showEmptyState('选择网盘频道', '点击左侧星标按钮将频道设为网盘'); }
-    } else {
-      $('input-bar')?.classList.remove('hidden');
-      if (currentEntity) { loadMessages(); }
-      else { showEmptyState('选择一个对话', '从左侧列表选择开始聊天'); }
-    }
-  });
-});
-
-function showEmptyState(title, desc) {
-  const mainArea = $('main-area');
-  if (!mainArea) return;
-  mainArea.classList.add('empty');
-  $('topbar')?.classList.add('hidden');
-  $('files-grid')?.classList.add('hidden');
-  $('messages-wrap')?.classList.add('hidden');
-  $('input-bar')?.classList.add('hidden');
-  const emptyState = mainArea.querySelector('.empty-state');
-  if (emptyState) {
-    emptyState.innerHTML = `
-      <svg class="icon-lg" viewBox="0 0 24 24" style="color:#2b5278;margin-bottom:12px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
-      <div style="font-size:18px;font-weight:500;margin-bottom:4px;">${escapeHtml(title)}</div>
-      <div style="font-size:14px;color:#708499;">${escapeHtml(desc)}</div>
-    `;
-  }
-}
-
-// ===== 网盘频道 =====
-function updateDriveBanner() {
-  if (driveChannelId) {
-    const chat = allChats.find(c => c.id === driveChannelId);
-    $('drive-subtitle') && ($('drive-subtitle').textContent = chat?.name || '已设置');
-    $('drive-channel-value') && ($('drive-channel-value').textContent = chat?.name || '已设置');
-  } else {
-    $('drive-subtitle') && ($('drive-subtitle').textContent = '点击设置网盘频道');
-    $('drive-channel-value') && ($('drive-channel-value').textContent = '未设置');
-  }
-}
-
-function setDriveChannel(chatId) {
-  if (driveChannelId === chatId) { driveChannelId = ''; localStorage.removeItem('drive_channel_id'); }
-  else { driveChannelId = chatId; localStorage.setItem('drive_channel_id', chatId); }
-  document.querySelectorAll('.chat-item').forEach((item, i) => {
-    const chat = allChats[i];
-    const oldPin = item.querySelector('.pin-icon');
-    if (oldPin) oldPin.remove();
-    if (chat && chat.id === driveChannelId) {
-      const pin = document.createElement('div'); pin.className = 'pin-icon'; pin.title = '网盘频道'; pin.textContent = '⭐';
-      item.appendChild(pin);
-    }
-  });
-  updateDriveBanner();
-  if (driveChannelId && currentMode === 'drive') { openDriveChannel(); }
-}
-
-$('drive-banner')?.addEventListener('click', () => { if (driveChannelId) { openDriveChannel(); } });
-$('set-drive-btn')?.addEventListener('click', () => { alert('请在左侧聊天列表中点击星标 ⭐ 按钮设置网盘频道'); });
-$('clear-drive-btn')?.addEventListener('click', () => { if (driveChannelId) { setDriveChannel(''); alert('已清除网盘频道设置'); } });
-
-function openDriveChannel() {
-  const chat = allChats.find(c => c.id === driveChannelId);
-  if (chat) {
-    document.querySelectorAll('.mode-tab').forEach(t => t.classList.remove('active'));
-    document.querySelector('.mode-tab[data-mode="drive"]')?.classList.add('active');
-    currentMode = 'drive';
-    openChat(chat, null);
-  }
-}
-
-// ===== 打开聊天/频道 =====
+// ===== 打开聊天 =====
 async function openChat(chat, itemEl) {
   currentEntity = chat.entity;
   currentPeer = chat.dialog.inputPeer || chat.entity;
+
+  // UI 切换
   document.querySelectorAll('.chat-item').forEach(i => i.classList.remove('active'));
   if (itemEl) itemEl.classList.add('active');
-  $('main-area')?.classList.remove('empty');
-  $('topbar')?.classList.remove('hidden');
-  $('topbar-name') && ($('topbar-name').textContent = chat.name);
-  $('topbar-sub') && ($('topbar-sub').textContent = chat.entity?.className?.replace('Channel', '频道').replace('User', '用户') || '');
-  const topAvatar = $('topbar-avatar');
-  if (topAvatar) { topAvatar.innerHTML = escapeHtml(chat.name.charAt(0).toUpperCase()); topAvatar.style.background = chat.color; }
-  const pinBtn = $('pin-btn');
-  if (pinBtn) { const isDrive = chat.id === driveChannelId; pinBtn.style.color = isDrive ? 'var(--tg-blue)' : ''; pinBtn.title = isDrive ? '取消网盘' : '设为网盘'; pinBtn.onclick = () => setDriveChannel(chat.id); }
+
+  el.chatWindow.classList.remove('no-chat');
+  el.chatWindow.querySelector('.placeholder')?.remove();
+  el.chatHeader.classList.remove('hidden');
+  el.messagesWrap.classList.remove('hidden');
+  el.inputBar.classList.remove('hidden');
+
+  el.chatName.textContent = chat.name;
+  el.chatStatus.textContent = '在线';
+  el.chatAvatar.innerHTML = escapeHtml(chat.name.charAt(0).toUpperCase());
+  el.chatAvatar.style.background = chat.color;
+
+  // 移动端
+  if (window.innerWidth <= 768) {
+    el.sidebar.classList.add('hidden-mobile');
+    el.chatWindow.classList.add('active-mobile');
+  }
+
+  // 加载头像
   try {
     const photos = await client.getProfilePhotos(chat.entity);
     if (photos.length > 0) {
       const buf = await client.downloadMedia(photos[0], { thumb: 0 });
-      if (buf && buf.length > 0 && topAvatar) { const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })); topAvatar.innerHTML = `<img src="${url}" alt="" />`; }
+      if (buf && buf.length > 0) {
+        const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
+        el.chatAvatar.innerHTML = `<img src="${url}" alt="" />`;
+      }
     }
   } catch (e) {}
-  if (window.innerWidth <= 768) { $('sidebar')?.classList.add('hidden-mobile'); $('main-area')?.classList.add('active-mobile'); }
-  loadMessages();
-}
 
-// ===== 加载消息/文件 =====
-async function loadMessages() {
-  if (!currentEntity) return;
-  const msgsEl = $('messages'); const gridEl = $('files-grid'); const wrapEl = $('messages-wrap');
-  if (currentMode === 'drive') {
-    wrapEl?.classList.add('hidden'); gridEl?.classList.remove('hidden'); $('input-bar')?.classList.add('hidden');
-    if (gridEl) gridEl.innerHTML = '<div class="loading-spinner" style="grid-column:1/-1;"></div>';
-    try {
-      const messages = await client.getMessages(currentEntity, { limit: 100 });
-      renderDriveGrid(messages);
-    } catch (e) { if (gridEl) gridEl.innerHTML = `<div style="grid-column:1/-1;padding:20px;color:#ff6b6b;text-align:center;">加载失败: ${escapeHtml(e.message)}</div>`; }
-  } else {
-    gridEl?.classList.add('hidden'); wrapEl?.classList.remove('hidden'); $('input-bar')?.classList.remove('hidden');
-    if (msgsEl) msgsEl.innerHTML = '<div class="loading-spinner"></div>';
-    try {
-      const messages = await client.getMessages(currentEntity, { limit: 50 });
-      msgsEl.innerHTML = ''; let lastDate = '';
-      for (const msg of messages.reverse()) {
-        const date = formatDate(msg.date);
-        if (date !== lastDate) { lastDate = date; const sep = document.createElement('div'); sep.className = 'date-sep'; sep.innerHTML = `<span>${date}</span>`; msgsEl.appendChild(sep); }
-        renderMessage(msg);
+  // 加载消息
+  el.messages.innerHTML = '<div class="loading-spinner"></div>';
+  try {
+    const messages = await client.getMessages(chat.entity, { limit: 50 });
+    el.messages.innerHTML = '';
+    let lastDate = '';
+    for (const msg of messages.reverse()) {
+      const date = formatDate(msg.date);
+      if (date !== lastDate) {
+        lastDate = date;
+        const sep = document.createElement('div');
+        sep.className = 'date-sep';
+        sep.innerHTML = `<span>${date}</span>`;
+        el.messages.appendChild(sep);
       }
-      msgsEl.scrollTop = msgsEl.scrollHeight;
-    } catch (e) { if (msgsEl) msgsEl.innerHTML = `<div style="padding:20px;color:#ff6b6b;">加载失败: ${escapeHtml(e.message)}</div>`; }
+      renderMessage(msg, chat);
+    }
+    el.messages.scrollTop = el.messages.scrollHeight;
+  } catch (e) {
+    el.messages.innerHTML = `<div style="padding:20px;color:#ff6b6b;">加载失败: ${escapeHtml(e.message)}</div>`;
   }
 }
 
-// ===== 网盘网格视图 =====
-function renderDriveGrid(messages) {
-  const grid = $('files-grid'); if (!grid) return; grid.innerHTML = ''; let count = 0;
-  for (const msg of messages) {
-    if (msg.className === 'MessageEmpty') continue;
-    const card = createFileCard(msg);
-    if (card) { grid.appendChild(card); count++; }
-  }
-  if (count === 0) grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;padding:40px;color:#708499;">该频道暂无媒体文件</div>';
-}
-
-function createFileCard(msg) {
-  const doc = msg.document || msg.media?.document;
-  const photo = msg.photo || msg.media?.photo;
-
-  if (photo || (doc && doc.mimeType?.startsWith('image/'))) {
-    const card = document.createElement('div'); card.className = 'file-card';
-    card.innerHTML = `<div class="file-thumb"><div class="placeholder">🖼️</div></div><div class="file-info"><div class="file-name">图片_${msg.id}</div><div class="file-meta"><span>图片</span></div></div><div class="file-actions"><button class="file-action-btn" data-action="preview"><svg viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>预览</button><button class="file-action-btn" data-action="download"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>下载</button></div>`;
-    client.downloadMedia(msg, { thumb: 1 }).then(buf => { if (buf && buf.length > 0) { const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })); const thumb = card.querySelector('.file-thumb'); if (thumb) thumb.innerHTML = `<img src="${url}" alt="" loading="lazy" />`; } }).catch(() => {});
-    if (doc) { const fn = doc.attributes?.find(a => a.fileName)?.fileName; if (fn) card.querySelector('.file-name').textContent = fn; const sz = formatSize(doc.size); if (sz) card.querySelector('.file-meta span').textContent = sz; }
-    card.querySelector('[data-action="preview"]')?.addEventListener('click', (e) => { e.stopPropagation(); openImagePreview(msg); });
-    card.querySelector('[data-action="download"]')?.addEventListener('click', (e) => { e.stopPropagation(); downloadFile(msg); });
-    card.querySelector('.file-thumb')?.addEventListener('click', () => openImagePreview(msg));
-    return card;
-  }
-
-  if (doc && doc.mimeType?.startsWith('video/')) {
-    const fileName = doc.attributes?.find(a => a.fileName)?.fileName || `video_${msg.id}`;
-    const size = formatSize(doc.size || 0);
-    const card = document.createElement('div'); card.className = 'file-card';
-    card.innerHTML = `<div class="file-thumb"><div class="placeholder">🎬</div><div class="play-overlay"><div class="play-btn"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></div></div></div><div class="file-info"><div class="file-name">${escapeHtml(fileName)}</div><div class="file-meta"><span>${size}</span></div></div><div class="file-actions"><button class="file-action-btn" data-action="play"><svg viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>播放</button><button class="file-action-btn" data-action="download"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>下载</button></div>`;
-    client.downloadMedia(msg, { thumb: 0 }).then(buf => { if (buf && buf.length > 0) { const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })); const thumb = card.querySelector('.file-thumb'); if (thumb) { const ph = thumb.querySelector('.placeholder'); if (ph) ph.remove(); const img = document.createElement('img'); img.src = url; img.loading = 'lazy'; thumb.insertBefore(img, thumb.firstChild); } } }).catch(() => {});
-    card.querySelector('[data-action="play"]')?.addEventListener('click', (e) => { e.stopPropagation(); playVideo(msg, doc); });
-    card.querySelector('[data-action="download"]')?.addEventListener('click', (e) => { e.stopPropagation(); downloadFile(msg); });
-    card.querySelector('.file-thumb')?.addEventListener('click', () => playVideo(msg, doc));
-    return card;
-  }
-
-  if (doc) {
-    const fileName = doc.attributes?.find(a => a.fileName)?.fileName || `file_${msg.id}`;
-    const size = formatSize(doc.size || 0);
-    const mime = doc.mimeType || '';
-    const icon = mime === 'application/pdf' ? '📄' : mime.includes('zip') || mime.includes('rar') || mime.includes('7z') ? '🗜️' : mime.includes('audio') ? '🎵' : '📦';
-    const card = document.createElement('div'); card.className = 'file-card';
-    card.innerHTML = `<div class="file-thumb"><div class="placeholder" style="font-size:48px;">${icon}</div></div><div class="file-info"><div class="file-name">${escapeHtml(fileName)}</div><div class="file-meta"><span>${size}</span></div></div><div class="file-actions"><button class="file-action-btn" data-action="download"><svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>下载</button></div>`;
-    card.querySelector('[data-action="download"]')?.addEventListener('click', (e) => { e.stopPropagation(); downloadFile(msg); });
-    return card;
-  }
-  return null;
-}
-
-// ===== 渲染消息（聊天模式）=====
-function renderMessage(msg) {
+// ===== 渲染消息 =====
+function renderMessage(msg, chat) {
   if (msg.className === 'MessageEmpty') return;
   const isOut = msg.out || false;
-  const div = document.createElement('div'); div.className = `msg ${isOut ? 'out' : 'in'}`;
-  let mediaHtml = ''; let textHtml = '';
+  const div = document.createElement('div');
+  div.className = `msg ${isOut ? 'out' : 'in'}`;
+
+  let mediaHtml = '';
+  let textHtml = '';
+
+  // 文本
   const text = msg.text || msg.message || '';
-  if (text) textHtml = `<div class="msg-text">${escapeHtml(text)}</div>`;
-  if (msg.media) mediaHtml = renderMsgMedia(msg);
+  if (text) textHtml = `<div class="text">${escapeHtml(text)}</div>`;
+
+  // 媒体
+  if (msg.media) {
+    mediaHtml = renderMedia(msg);
+  }
+
+  // 发送者名称（群聊）
   let senderHtml = '';
-  if (!isOut && currentEntity?.className === 'Channel' && msg.sender) { const sn = msg.sender.firstName || msg.sender.title || ''; if (sn) senderHtml = `<div class="msg-sender">${escapeHtml(sn)}</div>`; }
+  if (!isOut && chat.entity?.className === 'Channel' && msg.sender) {
+    const senderName = msg.sender.firstName || msg.sender.title || '';
+    if (senderName) senderHtml = `<div class="sender">${escapeHtml(senderName)}</div>`;
+  }
+
   const time = formatTime(msg.date);
-  div.innerHTML = `<div class="msg-bubble">${senderHtml}${mediaHtml}${textHtml}<div class="msg-time">${time}</div></div>`;
-  $('messages')?.appendChild(div);
+  div.innerHTML = `<div class="msg-bubble">${senderHtml}${mediaHtml}${textHtml}<div class="meta">${time}</div></div>`;
+  el.messages.appendChild(div);
 }
 
-function renderMsgMedia(msg) {
-  const doc = msg.document || msg.media?.document;
-  const photo = msg.photo || msg.media?.photo;
+function renderMedia(msg) {
+  const media = msg.media;
+  const doc = msg.document || media?.document || (media?.webpage?.document);
+  const photo = msg.photo || media?.photo || (media?.webpage?.photo);
+
   if (photo) {
-    const phId = `ph-${msg.id}`;
-    client.downloadMedia(msg, { thumb: 1 }).then(buf => { if (buf) { const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })); const el = $(phId); if (el) el.innerHTML = `<img src="${url}" alt="" style="max-width:320px;border-radius:8px;cursor:pointer;" />`; el?.querySelector('img')?.addEventListener('click', () => openImagePreview(msg)); } }).catch(() => {});
-    return `<div class="msg-media" id="${phId}"><div style="width:300px;height:200px;background:#1a1a2e;display:flex;align-items:center;justify-content:center;border-radius:8px;">🖼️ 加载中...</div></div>`;
+    // 图片：加载缩略图
+    const thumbId = `photo-${msg.id}`;
+    loadThumb(photo, thumbId, msg, 'photo');
+    return `<div class="msg-media" id="${thumbId}"><div style="width:300px;height:200px;background:#1a1a2e;display:flex;align-items:center;justify-content:center;border-radius:8px;">🖼️</div></div>`;
   }
+
   if (doc) {
     const mime = doc.mimeType || '';
-    const fileName = doc.attributes?.find(a => a.fileName)?.fileName || `file_${msg.id}`;
+    const attrs = doc.attributes || [];
+    const fileNameAttr = attrs.find(a => a.fileName);
+    const fileName = fileNameAttr?.fileName || `file_${msg.id}`;
     const size = formatSize(doc.size || 0);
+
     if (mime.startsWith('video/')) {
-      const vidId = `vid-${msg.id}`;
-      client.downloadMedia(msg, { thumb: 0 }).then(buf => { if (buf) { const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })); const el = $(vidId); if (el) { el.innerHTML = `<div style="position:relative;cursor:pointer;max-width:320px;"><img src="${url}" style="width:100%;border-radius:8px;" /><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,0.3);"><div style="width:48px;height:48px;border-radius:50%;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;"><svg width="20" height="20" viewBox="0 0 24 24" fill="white"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg></div></div></div>`; el.querySelector('div')?.addEventListener('click', () => playVideo(msg, doc)); } } }).catch(() => {});
-      return `<div class="msg-media" id="${vidId}"><div style="width:300px;height:200px;background:#000;display:flex;align-items:center;justify-content:center;border-radius:8px;">🎬 加载中...</div></div>`;
+      const vidId = `video-${msg.id}`;
+      loadVideoThumb(doc, vidId, msg);
+      return `<div class="msg-media" id="${vidId}"><div style="width:300px;height:200px;background:#000;display:flex;align-items:center;justify-content:center;border-radius:8px;font-size:40px;">🎬</div></div>`;
     }
+
     if (mime.startsWith('audio/')) {
-      const aid = `aud-${msg.id}`;
-      client.downloadMedia(msg).then(buf => { if (buf) { const url = URL.createObjectURL(new Blob([buf], { type: mime })); const el = $(aid); if (el) el.innerHTML = `<audio src="${url}" controls style="width:260px;"></audio>`; } }).catch(() => {});
-      return `<div class="msg-media" id="${aid}"><div style="padding:12px;width:280px;">🎵 加载中...</div></div>`;
+      const aid = `audio-${msg.id}`;
+      loadAudio(doc, aid, msg);
+      return `<div class="msg-media" id="${aid}"><div style="padding:8px;">🎵 加载中...</div></div>`;
     }
+
     if (mime.startsWith('image/')) {
-      const iid = `imgd-${msg.id}`;
-      client.downloadMedia(msg, { thumb: 1 }).then(buf => { if (buf) { const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })); const el = $(iid); if (el) el.innerHTML = `<img src="${url}" alt="" style="max-width:320px;border-radius:8px;cursor:pointer;" />`; el?.querySelector('img')?.addEventListener('click', () => openImagePreview(msg)); } }).catch(() => {});
-      return `<div class="msg-media" id="${iid}"><div style="width:300px;height:200px;background:#1a1a2e;display:flex;align-items:center;justify-content:center;border-radius:8px;">🖼️ 加载中...</div></div>`;
+      const iid = `img-${msg.id}`;
+      loadThumb(doc, iid, msg, 'document');
+      return `<div class="msg-media" id="${iid}"><div style="width:300px;height:200px;background:#1a1a2e;display:flex;align-items:center;justify-content:center;border-radius:8px;">🖼️</div></div>`;
     }
+
+    // 其他文件
     const icon = mime === 'application/pdf' ? '📄' : mime.includes('zip') ? '🗜️' : '📦';
-    return `<div class="msg-media"><div class="file-row"><div class="file-icon">${icon}</div><div class="file-text"><div class="n">${escapeHtml(fileName)}</div><div class="s">${size}</div></div><button class="file-dl-btn" data-msg-id="${msg.id}" style="background:var(--tg-blue);color:#fff;border:none;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:13px;">下载</button></div></div>`;
+    return `<div class="msg-media"><div class="file-card">
+      <div class="file-icon">${icon}</div>
+      <div class="file-info"><div class="file-name">${escapeHtml(fileName)}</div><div class="file-size">${size}</div></div>
+      <button class="file-dl-btn" data-msg-id="${msg.id}">下载</button>
+    </div></div>`;
   }
+
   return '';
 }
 
-// ===== 图片预览 =====
-function openImagePreview(msg) {
-  const overlay = $('preview-overlay'); const img = $('preview-img');
-  if (!overlay || !img) return;
-  overlay.classList.remove('hidden'); img.src = ''; img.alt = '加载中...';
-  client.downloadMedia(msg).then(buf => { if (buf && buf.length > 0) { img.src = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })); } }).catch(e => { console.error('preview error', e); img.alt = '加载失败'; });
+// 异步加载图片缩略图
+async function loadThumb(media, elId, msg, type) {
+  try {
+    const buf = await client.downloadMedia(msg, { thumb: 1 });
+    if (buf && buf.length > 0) {
+      const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
+      const container = $(elId);
+      if (container) {
+        container.innerHTML = `<img src="${url}" alt="" loading="lazy" />`;
+        container.querySelector('img')?.addEventListener('click', () => openPreview(url));
+      }
+      // 异步加载全尺寸
+      const fullBuf = await client.downloadMedia(msg);
+      if (fullBuf && fullBuf.length > 0) {
+        const fullUrl = URL.createObjectURL(new Blob([fullBuf], { type: 'image/jpeg' }));
+        const img = container?.querySelector('img');
+        if (img) img.src = fullUrl;
+      }
+    }
+  } catch (e) { console.log('thumb error', e); }
 }
-$('preview-close')?.addEventListener('click', () => $('preview-overlay')?.classList.add('hidden'));
-$('preview-overlay')?.addEventListener('click', (e) => { if (e.target.id === 'preview-overlay') $('preview-overlay')?.classList.add('hidden'); });
 
-// ===== 视频播放（浮窗）=====
-function playVideo(msg, doc) {
-  const player = $('video-player'); const video = $('vp-video');
-  if (!player || !video) return;
-  player.classList.remove('hidden');
-  $('vp-title') && ($('vp-title').textContent = doc?.attributes?.find(a => a.fileName)?.fileName || '视频');
-  video.src = ''; video.poster = '';
-  client.downloadMedia(msg, { thumb: 0 }).then(buf => { if (buf && buf.length > 0) { video.poster = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' })); } }).catch(() => {});
-  client.downloadMedia(msg).then(buf => { if (buf && buf.length > 0) { const url = URL.createObjectURL(new Blob([buf], { type: doc.mimeType || 'video/mp4' })); video.src = url; video.play().catch(() => {}); } }).catch(e => { console.error('video error:', e); alert('视频加载失败: ' + e.message); });
+// 异步加载视频（内联播放）
+async function loadVideoThumb(doc, elId, msg) {
+  try {
+    // 先加载缩略图
+    const buf = await client.downloadMedia(msg, { thumb: 0 });
+    if (buf && buf.length > 0) {
+      const url = URL.createObjectURL(new Blob([buf], { type: 'image/jpeg' }));
+      const container = $(elId);
+      if (container) {
+        container.innerHTML = `<div style="position:relative;cursor:pointer;"><img src="${url}" style="width:300px;display:block;border-radius:8px;" /><div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:48px;">▶️</div></div>`;
+        // 点击后加载完整视频内联播放
+        container.querySelector('div')?.addEventListener('click', async () => {
+          container.innerHTML = '<div style="padding:20px;">⏳ 加载视频...</div>';
+          try {
+            const fullBuf = await client.downloadMedia(msg);
+            if (fullBuf) {
+              const vUrl = URL.createObjectURL(new Blob([fullBuf], { type: doc.mimeType || 'video/mp4' }));
+              container.innerHTML = `<video src="${vUrl}" controls autoplay style="max-width:360px;max-height:400px;border-radius:8px;"></video>`;
+            }
+          } catch (e) {
+            container.innerHTML = `<div style="padding:8px;color:#ff6b6b;">加载失败</div>`;
+          }
+        });
+      }
+    }
+  } catch (e) { console.log('video thumb error', e); }
 }
-$('vp-close')?.addEventListener('click', () => { $('video-player')?.classList.add('hidden'); const v = $('vp-video'); if (v) { v.pause(); v.src = ''; v.poster = ''; } });
 
-// ===== 下载文件 =====
-async function downloadFile(msg) {
-  const doc = msg.document || msg.media?.document;
-  const fileName = doc?.attributes?.find(a => a.fileName)?.fileName || (msg.photo ? `photo_${msg.id}.jpg` : `file_${msg.id}`);
-  const toast = showToast(`正在下载: ${fileName}`);
+// 异步加载音频
+async function loadAudio(doc, elId, msg) {
   try {
     const buf = await client.downloadMedia(msg);
-    if (buf) { const mimeType = doc?.mimeType || (msg.photo ? 'image/jpeg' : 'application/octet-stream'); const blob = new Blob([buf], { type: mimeType }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = fileName; document.body.appendChild(a); a.click(); document.body.removeChild(a); setTimeout(() => URL.revokeObjectURL(url), 1000); toast.textContent = `✓ 下载完成: ${fileName}`; setTimeout(() => toast.remove(), 2000); }
-  } catch (err) { console.error('download error', err); toast.textContent = `✗ 下载失败: ${err.message}`; toast.style.background = '#e17076'; setTimeout(() => toast.remove(), 3000); }
+    if (buf && buf.length > 0) {
+      const url = URL.createObjectURL(new Blob([buf], { type: doc.mimeType || 'audio/mpeg' }));
+      const container = $(elId);
+      if (container) container.innerHTML = `<audio src="${url}" controls style="width:100%;"></audio>`;
+    }
+  } catch (e) { console.log('audio error', e); }
 }
 
-function showToast(text) {
-  const toast = document.createElement('div');
-  toast.style.cssText = `position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: #fff; padding: 10px 20px; border-radius: 8px; font-size: 14px; z-index: 10000; max-width: 80vw; word-break: break-all;`;
-  toast.textContent = text; document.body.appendChild(toast); return toast;
+// 图片预览
+function openPreview(url) {
+  el.previewImg.src = url;
+  el.previewOverlay.classList.remove('hidden');
+}
+el.previewClose.addEventListener('click', () => el.previewOverlay.classList.add('hidden'));
+el.previewOverlay.addEventListener('click', (e) => {
+  if (e.target === el.previewOverlay) el.previewOverlay.classList.add('hidden');
+});
+
+// 文件下载按钮（事件委托）
+el.messages.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.file-dl-btn');
+  if (!btn) return;
+  const msgId = parseInt(btn.dataset.msgId);
+  btn.textContent = '...'; btn.disabled = true;
+  try {
+    const msgs = await client.getMessages(currentEntity, { ids: [msgId] });
+    if (msgs[0]) {
+      const buf = await client.downloadMedia(msgs[0]);
+      if (buf) {
+        const doc = msgs[0].document || msgs[0].media?.document;
+        const blob = new Blob([buf], { type: doc?.mimeType || 'application/octet-stream' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const attrs = doc?.attributes || [];
+        const fa = attrs.find(x => x.fileName);
+        a.href = url; a.download = fa?.fileName || `file_${msgId}`;
+        a.click(); URL.revokeObjectURL(url);
+      }
+    }
+    btn.textContent = '下载'; btn.disabled = false;
+  } catch (err) {
+    btn.textContent = '失败'; btn.disabled = false;
+    console.error(err);
+  }
+});
+
+// ===== 发送消息 =====
+el.sendBtn.addEventListener('click', () => sendMessage());
+el.msgInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+el.msgInput.addEventListener('input', () => {
+  el.msgInput.style.height = 'auto';
+  el.msgInput.style.height = Math.min(el.msgInput.scrollHeight, 120) + 'px';
+});
+
+async function sendMessage() {
+  const text = el.msgInput.value.trim();
+  if (!text || !currentEntity) return;
+  el.msgInput.value = '';
+  el.msgInput.style.height = 'auto';
+  el.sendBtn.disabled = true;
+  try {
+    await client.sendMessage(currentEntity, { message: text });
+    // 重新加载消息
+    const messages = await client.getMessages(currentEntity, { limit: 1 });
+    if (messages[0]) {
+      renderMessage(messages[0], { entity: currentEntity });
+      el.messages.scrollTop = el.messages.scrollHeight;
+    }
+  } catch (e) {
+    alert('发送失败: ' + (e.message || e));
+  }
+  el.sendBtn.disabled = false;
 }
 
-$('messages')?.addEventListener('click', async (e) => {
-  const btn = e.target.closest('.file-dl-btn'); if (!btn) return;
-  const msgId = parseInt(btn.dataset.msgId); const origText = btn.textContent; btn.textContent = '...'; btn.disabled = true;
-  try { const msgs = await client.getMessages(currentEntity, { ids: [msgId] }); if (msgs[0]) await downloadFile(msgs[0]); btn.textContent = origText; btn.disabled = false; }
-  catch (err) { btn.textContent = '失败'; btn.disabled = false; setTimeout(() => { btn.textContent = origText; btn.disabled = false; }, 2000); console.error(err); }
+// ===== 发送文件 =====
+el.attachBtn.addEventListener('click', () => el.fileInput.click());
+el.fileInput.addEventListener('change', async () => {
+  const files = el.fileInput.files;
+  if (!files.length || !currentEntity) return;
+  for (const file of files) {
+    try {
+      await client.sendFile(currentEntity, { file, forceDocument: false });
+    } catch (e) {
+      alert('发送失败: ' + (e.message || e));
+    }
+  }
+  el.fileInput.value = '';
+  // 刷新消息
+  const messages = await client.getMessages(currentEntity, { limit: 5 });
+  el.messages.innerHTML = '';
+  for (const msg of messages.reverse()) renderMessage(msg, { entity: currentEntity });
+  el.messages.scrollTop = el.messages.scrollHeight;
 });
 
 // ===== 返回（移动端）=====
-$('back-btn')?.addEventListener('click', () => { $('sidebar')?.classList.remove('hidden-mobile'); $('main-area')?.classList.remove('active-mobile'); });
+el.backBtn.addEventListener('click', () => {
+  el.sidebar.classList.remove('hidden-mobile');
+  el.chatWindow.classList.remove('active-mobile');
+});
 
 // ===== 设置面板 =====
-$('user-avatar')?.addEventListener('click', () => $('settings-panel')?.classList.add('open'));
-$('settings-close')?.addEventListener('click', () => $('settings-panel')?.classList.remove('open'));
-$('logout-btn')?.addEventListener('click', () => { if (!confirm('确定退出登录？')) return; localStorage.removeItem('tg_session'); location.reload(); });
+el.menuBtn.addEventListener('click', () => el.settingsPanel.classList.add('open'));
+el.settingsClose.addEventListener('click', () => el.settingsPanel.classList.remove('open'));
 
-// ===== 背景设置 =====
-let bgOpacity = parseInt(localStorage.getItem('bg_opacity') || '8');
-$('bg-opacity') && ($('bg-opacity').value = bgOpacity);
-function updateBgOpacity() { const bg = $('messages-bg'); if (bg) bg.style.opacity = (bgOpacity / 100).toString(); }
-$('bg-opacity')?.addEventListener('input', (e) => { bgOpacity = parseInt(e.target.value); localStorage.setItem('bg_opacity', bgOpacity); updateBgOpacity(); });
-document.querySelectorAll('.bg-option').forEach(opt => { opt.addEventListener('click', () => { document.querySelectorAll('.bg-option').forEach(o => o.classList.remove('active')); opt.classList.add('active'); const bg = opt.dataset.bg; const bgEl = $('messages-bg'); if (bgEl) { if (bg === 'default') { bgEl.style.background = 'linear-gradient(135deg, #0e1621, #1a2a3a)'; bgEl.style.backgroundImage = ''; } else if (bg === 'tg') { bgEl.style.background = 'linear-gradient(135deg, #2b5278, #0e1621)'; bgEl.style.backgroundImage = ''; } else if (bg === 'dark') { bgEl.style.background = '#0e1621'; bgEl.style.backgroundImage = ''; } localStorage.setItem('bg_type', bg); } }); });
-$('bg-file-input')?.addEventListener('change', (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = (ev) => { const bgEl = $('messages-bg'); if (bgEl) { bgEl.style.backgroundImage = `url(${ev.target.result})`; bgEl.style.backgroundSize = 'cover'; bgEl.style.backgroundPosition = 'center'; localStorage.setItem('bg_custom', ev.target.result); localStorage.setItem('bg_type', 'custom'); document.querySelectorAll('.bg-option').forEach(o => o.classList.remove('active')); } }; reader.readAsDataURL(file); });
-function restoreBgSettings() { const bgType = localStorage.getItem('bg_type') || 'default'; const bgCustom = localStorage.getItem('bg_custom'); const bgEl = $('messages-bg'); if (!bgEl) return; if (bgType === 'custom' && bgCustom) { bgEl.style.backgroundImage = `url(${bgCustom})`; bgEl.style.backgroundSize = 'cover'; bgEl.style.backgroundPosition = 'center'; } else if (bgType === 'tg') { bgEl.style.background = 'linear-gradient(135deg, #2b5278, #0e1621)'; } else if (bgType === 'dark') { bgEl.style.background = '#0e1621'; } else { bgEl.style.background = 'linear-gradient(135deg, #0e1621, #1a2a3a)'; } updateBgOpacity(); }
+// 背景设置
+document.querySelectorAll('.bg-option').forEach(opt => {
+  opt.addEventListener('click', () => {
+    const bg = opt.dataset.bg;
+    if (bg === 'default') {
+      el.messagesBg.style.background = '#0e1621';
+      localStorage.removeItem('tg_bg');
+    } else if (bg === 'telegram') {
+      el.messagesBg.style.background = 'linear-gradient(135deg, #2b5278 0%, #0e1621 100%)';
+      localStorage.setItem('tg_bg', 'telegram');
+    }
+  });
+});
 
-// ===== 发送消息 =====
-$('send-btn')?.addEventListener('click', sendMessage);
-$('msg-input')?.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } });
-async function sendMessage() { const input = $('msg-input'); if (!input || !currentEntity) return; const text = input.value.trim(); if (!text) return; const btn = $('send-btn'); btn.disabled = true; input.value = ''; try { await client.sendMessage(currentEntity, { message: text }); loadMessages(); } catch (e) { console.error('send error', e); alert('发送失败: ' + e.message); input.value = text; } btn.disabled = false; }
-$('attach-btn')?.addEventListener('click', () => $('file-input')?.click());
-$('file-input')?.addEventListener('change', async (e) => { const files = e.target.files; if (!files || !files.length || !currentEntity) return; const btn = $('attach-btn'); btn.disabled = true; for (const file of files) { try { showToast(`正在上传: ${file.name}`); await client.sendFile(currentEntity, { file }); } catch (err) { console.error('upload error', err); alert(`上传失败 ${file.name}: ${err.message}`); } } e.target.value = ''; btn.disabled = false; loadMessages(); });
+el.bgFileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const dataUrl = ev.target.result;
+    localStorage.setItem('tg_bg', dataUrl);
+    el.messagesBg.style.backgroundImage = `url(${dataUrl})`;
+    el.messagesBg.style.backgroundSize = 'cover';
+  };
+  reader.readAsDataURL(file);
+});
+
+el.bgOpacity.addEventListener('input', (e) => {
+  el.messagesBg.style.opacity = (e.target.value / 100);
+  localStorage.setItem('tg_bg_opacity', e.target.value);
+});
+
+function loadBackground() {
+  const bg = localStorage.getItem('tg_bg');
+  const opacity = localStorage.getItem('tg_bg_opacity') || '8';
+  el.bgOpacity.value = parseInt(opacity);
+  el.messagesBg.style.opacity = (parseInt(opacity) / 100);
+  if (bg === 'telegram') {
+    el.messagesBg.style.background = 'linear-gradient(135deg, #2b5278 0%, #0e1621 100%)';
+  } else if (bg && bg.startsWith('data:')) {
+    el.messagesBg.style.backgroundImage = `url(${bg})`;
+    el.messagesBg.style.backgroundSize = 'cover';
+    el.messagesBg.style.backgroundPosition = 'center';
+  } else {
+    el.messagesBg.style.background = '#0e1621';
+  }
+}
+
+// ===== 退出登录 =====
+el.logoutBtn.addEventListener('click', () => {
+  if (!confirm('确定退出登录？')) return;
+  localStorage.removeItem('tg_session');
+  location.reload();
+});
 
 // ===== 工具函数 =====
-function formatSize(bytes) { if (!bytes) return '0 B'; if (bytes < 1024) return bytes + ' B'; if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB'; if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB'; return (bytes / 1073741824).toFixed(2) + ' GB'; }
-function escapeHtml(s) { if (!s) return ''; return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
-function formatTime(ts) { if (!ts) return ''; const d = new Date(ts * 1000); return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }); }
-function formatDate(ts) { if (!ts) return ''; const d = new Date(ts * 1000); const today = new Date(); if (d.toDateString() === today.toDateString()) return '今天'; return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' }); }
+function formatSize(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+  return (bytes / 1073741824).toFixed(2) + ' GB';
+}
+
+function escapeHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function formatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatDate(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) return '今天';
+  return d.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' });
+}
 
 // ===== 启动 =====
 init();
-const observer = new MutationObserver(() => { if ($('app-view')?.classList.contains('active')) { restoreBgSettings(); observer.disconnect(); } });
-if ($('app-view')) observer.observe($('app-view'), { attributes: true, attributeFilter: ['class'] });
