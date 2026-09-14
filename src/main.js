@@ -9,29 +9,32 @@ const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
 const API_HASH = import.meta.env.VITE_API_HASH || '';
 const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
 
-// ===== 代理 patch（必须在使用 WebSocket 之前安装）=====
-// 把 GramJS 发往 wss://<dc>.web.telegram.org/... 的连接，改写成走你的 Cloudflare Worker 反代。
-if (PROXY_DOMAIN) {
-  const OrigWS = self.WebSocket;
-  self.WebSocket = function (url, protocols) {
-    if (typeof url === 'string' && url.includes('telegram.org')) {
-      try {
-        const u = new URL(url);
-        url = `wss://${PROXY_DOMAIN}/${u.hostname}${u.pathname}`;
-      } catch (e) {}
+// ===== 代理：重写 GramJS 内部的 WebSocket 地址（最可靠，不依赖全局 patch）=====
+// 原理：GramJS 在浏览器用 PromisedWebSockets，最终通过 getWebSocketLink(ip, port) 拼出
+// wss://<dc>.web.telegram.org/apiws。我们继承它、重写该方法，把地址改成走你的 Worker 反代。
+// 注意：之前“覆盖 window.WebSocket”的写法对 w3cwebsocket 无效（它在加载时就捕获了全局引用），
+// 会导致直连官方域名、代理形同虚设——这正是“一直连接中 / ERR_BLOCKED_BY_CLIENT”的根因。
+class ProxiedWebSockets extends PromisedWebSockets {
+  getWebSocketLink(ip, port, testServers) {
+    const path = `/apiws${testServers ? '_test' : ''}`;
+    if (PROXY_DOMAIN) {
+      // wss://<worker>/<dc>.web.telegram.org/apiws  —— Worker 解析路径后转发到真实域名
+      return `wss://${PROXY_DOMAIN}/${ip}${path}`;
     }
-    return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
-  };
-  self.WebSocket.prototype = OrigWS.prototype;
-  self.WebSocket.CONNECTING = OrigWS.CONNECTING;
-  self.WebSocket.OPEN = OrigWS.OPEN;
-  self.WebSocket.CLOSING = OrigWS.CLOSING;
-  self.WebSocket.CLOSED = OrigWS.CLOSED;
+    return super.getWebSocketLink(ip, port, testServers);
+  }
+}
 
+if (!PROXY_DOMAIN) {
+  console.warn('[tg] 未设置 VITE_PROXY_DOMAIN，将直连 Telegram（国内大概率失败）。请在 Cloudflare Pages 环境变量里配置。');
+}
+
+// 安全兜底：万一仍有对 telegram.org 的 HTTP 请求（如下载媒体等），也走代理
+if (PROXY_DOMAIN) {
   const origFetch = self.fetch;
   self.fetch = function (input, init) {
     let s = typeof input === 'string' ? input : (input?.url || '');
-    if (s.includes('telegram.org')) {
+    if (s.includes('telegram.org') && !s.includes(PROXY_DOMAIN)) {
       try {
         const u = new URL(s);
         const n = `https://${PROXY_DOMAIN}/${u.hostname}${u.pathname}${u.search}`;
@@ -54,8 +57,9 @@ let handlersRegistered = false;
 const COLORS = ['#e17076','#7bc862','#65aadd','#a695c7','#ee7aae','#6ec9cb','#faa774','#5b7b9a'];
 
 // ===== 创建客户端（统一配置浏览器 WebSocket 传输）=====
-// 关键：useWSS + networkSocket: PromisedWebSockets 让 GramJS 在浏览器里真的走 WebSocket，
+// 关键：useWSS + networkSocket: ProxiedWebSockets 让 GramJS 在浏览器里真的走 WebSocket，
 // 否则默认 ConnectionTCPObfuscated 依赖 Node 的 net.Socket，浏览器里会直接报错连不上。
+// ProxiedWebSockets 继承自 PromisedWebSockets，仅重写了 getWebSocketLink 把地址改走 Worker 反代。
 function createClient(sessionStr) {
   return new TelegramClient(
     new StringSession(sessionStr || ''),
@@ -65,7 +69,7 @@ function createClient(sessionStr) {
       connectionRetries: 5,
       retryDelay: 2000,
       useWSS: true,
-      networkSocket: PromisedWebSockets,
+      networkSocket: ProxiedWebSockets,
     }
   );
 }
