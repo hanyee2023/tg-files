@@ -32,69 +32,63 @@
   ::-webkit-scrollbar{width:6px;height:6px;}
   ::-webkit-scrollbar-thumb{background:var(--tg-sub);border-radius:3px;opacity:.5;}
 
-  /* ===== 三栏布局 ===== */
   #app{display:flex;height:100vh;width:100vw;}
   #sidebar{width:320px;min-width:320px;display:flex;flex-direction:column;background:var(--tg-panel);border-right:1px solid var(--tg-border);}
   #chat{flex:1;display:flex;flex-direction:column;background:var(--tg-chat-bg);min-width:0;}
   #details{width:300px;min-width:300px;display:none;flex-direction:column;background:var(--tg-panel);border-left:1px solid var(--tg-border);}
   @media(min-width:900px){ #details{display:flex;} }
 
-  /* ===== 通用图标按钮（AyuGram 风格圆形）===== */
   .icon-btn{width:40px;height:40px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:var(--tg-sub);transition:.15s;flex:0 0 auto;}
   .icon-btn:hover{background:var(--tg-hover);color:var(--tg-accent);}
   .icon-btn svg{width:22px;height:22px;}
 
-  /* ===== 侧边栏头部 ===== */
   #sidebarHeader{display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--tg-border);}
   #searchWrap{flex:1;background:var(--tg-bg);border-radius:20px;padding:0 12px;display:flex;align-items:center;}
   #searchWrap input{flex:1;border:none;outline:none;background:none;color:var(--tg-text);height:38px;font-size:14px;}
   #searchWrap svg{width:18px;height:18px;color:var(--tg-sub);margin-right:6px;}
 
-  /* ===== 对话列表 ===== */
   #dialogs{flex:1;overflow-y:auto;}
   .dialog{display:flex;align-items:center;gap:10px;padding:9px 12px;cursor:pointer;position:relative;}
   .dialog:hover{background:var(--tg-hover);}
   .dialog.active{background:var(--tg-accent-soft);}
   .avatar{width:50px;height:50px;border-radius:50%;object-fit:cover;background:var(--tg-attach);flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:18px;overflow:hidden;}
   .avatar.sm{width:40px;height:40px;font-size:15px;}
+  .avatar.xs{width:24px;height:24px;font-size:11px;flex:0 0 auto;}
   .dialog .meta{flex:1;min-width:0;}
   .dialog .name{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .dialog .last{color:var(--tg-sub);font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .dialog .time{color:var(--tg-sub);font-size:11px;flex:0 0 auto;align-self:flex-start;margin-top:3px;}
   .join-btn{font-size:12px;color:#fff;background:var(--tg-accent);border-radius:14px;padding:5px 12px;font-weight:600;}
-  .join-btn:hover{filter:brightness(1.08);}
 
-  /* ===== 聊天头部 ===== */
-  #chatHeader{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--tg-border);background:var(--tg-panel);}
+  #chatHeader{display:none;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--tg-border);background:var(--tg-panel);}
   #chatTitleWrap{flex:1;min-width:0;}
   #chatTitle{font-weight:600;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   #chatStatus{font-size:12px;color:var(--tg-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
-  /* ===== 消息区 ===== */
   #messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:2px;}
   .row{display:flex;width:100%;}
   .row.out{justify-content:flex-end;}
   .row.in{justify-content:flex-start;}
-  .msg{max-width:78%;padding:6px 10px 8px;border-radius:14px;position:relative;box-shadow:var(--tg-shadow);font-size:15px;line-height:1.4;word-wrap:break-word;}
+  .msg{max-width:80%;padding:6px 10px 8px;border-radius:14px;position:relative;box-shadow:var(--tg-shadow);font-size:15px;line-height:1.4;word-wrap:break-word;}
   .row.in .msg{background:var(--tg-bubble-in);border-bottom-left-radius:4px;}
   .row.out .msg{background:var(--tg-bubble-out);color:var(--tg-out-text);border-bottom-right-radius:4px;}
-  .msg .sender{font-size:13px;font-weight:600;color:var(--tg-accent);margin-bottom:2px;}
+  .sender-row{display:flex;align-items:center;gap:6px;margin-bottom:3px;}
+  .msg .sender{font-size:13px;font-weight:600;color:var(--tg-accent);}
   .msg .text{white-space:pre-wrap;}
   .msg .mt{font-size:11px;opacity:.6;float:right;margin:4px 0 -2px 8px;}
-  .row.in .msg .avatar.inline{position:absolute;left:-46px;top:0;width:38px;height:38px;}
 
-  /* 媒体 */
   .msg-media{position:relative;margin-top:4px;border-radius:10px;overflow:hidden;background:var(--tg-attach);min-height:60px;display:flex;align-items:center;justify-content:center;}
-  .msg-media img{display:block;max-width:300px;max-height:340px;border-radius:10px;}
-  .msg-media video{max-width:300px;max-height:340px;border-radius:10px;background:#000;}
+  .msg-media img{display:block;width:100%;max-width:340px;border-radius:10px;}
+  .msg-media video{width:100%;max-width:340px;border-radius:10px;background:#000;}
+  .lazy-ph{width:240px;max-width:100%;height:170px;background:var(--tg-attach);border-radius:10px;background-size:cover;background-position:center;}
   .play-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.28);cursor:pointer;}
   .play-overlay svg{width:54px;height:54px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5));}
+  .media-size{position:absolute;left:6px;bottom:6px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;padding:2px 7px;border-radius:10px;}
   .file-card{display:flex;align-items:center;gap:10px;padding:8px;background:var(--tg-accent-soft);border-radius:10px;margin-top:4px;}
   .file-card .fi{width:38px;height:38px;border-radius:8px;background:var(--tg-accent);color:#fff;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}
   .file-card .fn{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .file-card .fs{font-size:11px;opacity:.7;}
 
-  /* 消息操作按钮 */
   .msg-actions{position:absolute;top:-14px;display:flex;gap:2px;background:var(--tg-panel);border-radius:18px;padding:2px;box-shadow:var(--tg-shadow);opacity:0;transition:.15s;pointer-events:none;}
   .row.out .msg-actions{right:6px;}
   .row.in .msg-actions{left:6px;}
@@ -104,19 +98,16 @@
   .act-btn.del:hover{color:var(--tg-danger);}
   .act-btn svg{width:16px;height:16px;}
 
-  /* 进度条 */
-  .progress{width:200px;height:6px;border-radius:3px;background:var(--tg-hover-strong);overflow:hidden;margin:8px 0;}
+  .progress{width:220px;height:6px;border-radius:3px;background:var(--tg-hover-strong);overflow:hidden;margin:8px 0;}
   .progress > i{display:block;height:100%;width:0;background:var(--tg-accent);transition:width .2s;}
   .loading-spinner{width:26px;height:26px;border:3px solid var(--tg-accent-soft);border-top-color:var(--tg-accent);border-radius:50%;animation:spin .8s linear infinite;}
   @keyframes spin{to{transform:rotate(360deg);}}
 
-  /* ===== 输入栏 ===== */
-  #composer{display:flex;align-items:center;gap:6px;padding:8px 10px;border-top:1px solid var(--tg-border);background:var(--tg-panel);}
+  #composer{display:none;align-items:center;gap:6px;padding:8px 10px;border-top:1px solid var(--tg-border);background:var(--tg-panel);}
   #msgInput{flex:1;height:42px;border-radius:21px;border:none;outline:none;background:var(--tg-bg);color:var(--tg-text);padding:0 16px;font-size:15px;}
   #btnSend{background:var(--tg-accent);color:#fff;}
   #btnSend:hover{filter:brightness(1.08);color:#fff;}
 
-  /* ===== 右侧详情 ===== */
   #detailsPlaceholder{flex:1;display:flex;align-items:center;justify-content:center;color:var(--tg-sub);font-size:14px;padding:20px;text-align:center;}
   #detailsContent{flex:1;overflow-y:auto;display:none;flex-direction:column;align-items:center;padding:24px 16px;gap:10px;}
   #detailsContent.show{display:flex;}
@@ -125,17 +116,15 @@
   #detailsContent .d-sub{font-size:13px;color:var(--tg-sub);}
   #detailsContent .d-about{font-size:13px;color:var(--tg-text);text-align:center;opacity:.85;margin-top:6px;}
   .d-stat{display:flex;width:100%;justify-content:space-around;margin-top:14px;padding-top:14px;border-top:1px solid var(--tg-border);}
-  .d-stat div{text-align:center;}
   .d-stat b{display:block;font-size:16px;}
   .d-stat span{font-size:11px;color:var(--tg-sub);}
 
-  /* ===== 滑出面板（设置/网盘）===== */
-  .slide-panel{position:fixed;top:0;right:0;height:100vh;width:340px;max-width:90vw;background:var(--tg-panel);box-shadow:-4px 0 20px rgba(0,0,0,.18);z-index:50;display:flex;flex-direction:column;transform:translateX(100%);transition:transform .22s ease;}
+  /* 设置面板：左侧滑出 */
+  .slide-panel{position:fixed;top:0;left:0;height:100vh;width:340px;max-width:90vw;background:var(--tg-panel);box-shadow:4px 0 20px rgba(0,0,0,.18);z-index:60;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform .22s ease;}
   .slide-panel.open{transform:translateX(0);}
   .panel-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--tg-border);font-size:17px;font-weight:600;}
   .panel-head .spacer{flex:1;}
 
-  /* 账号头部 */
   #accountHeader{display:flex;align-items:center;gap:12px;padding:18px 16px;background:var(--tg-accent);color:#fff;}
   #accountHeader .avatar{background:rgba(255,255,255,.22);}
   #accountHeader .a-name{font-size:17px;font-weight:700;}
@@ -153,20 +142,21 @@
   .seg .t-light{background:var(--tg-bg);border:1px solid var(--tg-border);}
   .seg .t-dark{background:#0e1621;}
 
-  /* 网盘分类 */
+  /* 网盘：全屏 */
+  #netdisk{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;z-index:200;background:var(--tg-bg);display:none;flex-direction:column;}
+  #netdisk.open{display:flex;}
   #netdiskTabs{display:flex;gap:6px;padding:10px 12px;overflow-x:auto;border-bottom:1px solid var(--tg-border);}
-  #netdiskTabs button{flex:0 0 auto;padding:6px 12px;border-radius:16px;background:var(--tg-bg);color:var(--tg-sub);font-size:13px;font-weight:600;}
+  #netdiskTabs button{flex:0 0 auto;padding:6px 12px;border-radius:16px;background:var(--tg-panel);color:var(--tg-sub);font-size:13px;font-weight:600;}
   #netdiskTabs button.sel{background:var(--tg-accent);color:#fff;}
-  #netdiskGrid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:10px;padding:12px;align-content:start;}
-  .nk-card{background:var(--tg-bg);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;cursor:pointer;position:relative;}
-  .nk-thumb{width:100%;aspect-ratio:1/1;background:var(--tg-attach);display:flex;align-items:center;justify-content:center;object-fit:cover;position:relative;}
+  #netdiskGrid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;padding:12px;align-content:start;}
+  .nk-card{background:var(--tg-panel);border-radius:10px;overflow:hidden;display:flex;flex-direction:column;cursor:pointer;position:relative;}
+  .nk-thumb{width:100%;aspect-ratio:1/1;background:var(--tg-attach);display:flex;align-items:center;justify-content:center;object-fit:cover;position:relative;background-size:cover;background-position:center;}
   .nk-thumb.play::after{content:"";position:absolute;width:0;height:0;border-left:20px solid #fff;border-top:13px solid transparent;border-bottom:13px solid transparent;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6));}
   .nk-name{font-size:11px;padding:5px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .fab{position:absolute;right:16px;bottom:16px;width:54px;height:54px;border-radius:50%;background:var(--tg-accent);color:#fff;font-size:28px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,.3);}
+  .fab{position:fixed;right:20px;bottom:20px;width:56px;height:56px;border-radius:50%;background:var(--tg-accent);color:#fff;font-size:28px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:210;}
   .fab:hover{filter:brightness(1.08);}
 
-  /* ===== 媒体查看器 ===== */
-  #viewer{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:80;display:none;align-items:center;justify-content:center;flex-direction:column;}
+  #viewer{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:220;display:none;align-items:center;justify-content:center;flex-direction:column;}
   #viewer.open{display:flex;}
   #viewerMedia{max-width:92vw;max-height:82vh;border-radius:8px;}
   #viewerBar{position:absolute;top:14px;left:0;right:0;display:flex;justify-content:space-between;padding:0 18px;}
@@ -176,7 +166,6 @@
   .viewer-btn{width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center;}
   .viewer-btn svg{width:22px;height:22px;}
 
-  /* 弹窗菜单 */
   .menu{position:fixed;z-index:90;background:var(--tg-panel);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.25);padding:6px;min-width:170px;display:none;}
   .menu.open{display:block;}
   .menu button{display:flex;align-items:center;gap:10px;width:100%;padding:10px 12px;border-radius:8px;font-size:14px;text-align:left;}
@@ -184,15 +173,23 @@
   .menu button.danger{color:var(--tg-danger);}
   .menu .sep{height:1px;background:var(--tg-border);margin:4px 0;}
 
-  /* Toast */
-  #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.82);color:#fff;padding:10px 18px;border-radius:22px;font-size:13px;z-index:120;opacity:0;transition:.2s;pointer-events:none;max-width:80vw;text-align:center;}
+  #toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.82);color:#fff;padding:10px 18px;border-radius:22px;font-size:13px;z-index:240;opacity:0;transition:.2s;pointer-events:none;max-width:80vw;text-align:center;}
   #toast.show{opacity:1;}
   .empty-hint{flex:1;display:flex;align-items:center;justify-content:center;color:var(--tg-sub);font-size:14px;}
+
+  /* 移动端适配 */
+  @media(max-width:768px){
+    #sidebar{width:100%;min-width:0;}
+    #chat{display:none;}
+    #details{display:none !important;}
+    body.chat-open #sidebar{display:none;}
+    body.chat-open #chat{display:flex;}
+    .msg{max-width:88%;}
+  }
 </style>
 </head>
 <body>
   <div id="app">
-    <!-- 侧边栏 -->
     <aside id="sidebar">
       <div id="sidebarHeader">
         <button id="btnMenu" class="icon-btn" title="设置">
@@ -202,16 +199,12 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           <input id="searchInput" placeholder="搜索对话 / 频道" autocomplete="off">
         </div>
-        <button id="btnNetdisk" class="icon-btn" title="网盘">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        </button>
       </div>
       <div id="dialogs"></div>
     </aside>
 
-    <!-- 聊天 -->
     <main id="chat">
-      <div id="chatHeader" style="display:none;">
+      <div id="chatHeader">
         <button id="btnBack" class="icon-btn" title="返回">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
         </button>
@@ -225,7 +218,7 @@
         </button>
       </div>
       <div id="messages"><div class="empty-hint">选择左侧对话开始聊天</div></div>
-      <div id="composer" style="display:none;">
+      <div id="composer">
         <button id="btnAttach" class="icon-btn" title="附件">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
         </button>
@@ -237,7 +230,6 @@
       </div>
     </main>
 
-    <!-- 右侧详情 -->
     <aside id="details">
       <div id="detailsPlaceholder">选择一个对话查看详情与简介</div>
       <div id="detailsContent">
@@ -250,8 +242,14 @@
     </aside>
   </div>
 
-  <!-- 设置面板 -->
+  <!-- 设置面板（左侧） -->
   <div id="settings" class="slide-panel">
+    <div class="panel-head">
+      <button id="btnSettingsClose" class="icon-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+      设置
+    </div>
     <div id="accountHeader">
       <div class="avatar" id="accAvatar"></div>
       <div>
@@ -285,8 +283,8 @@
     </div>
   </div>
 
-  <!-- 网盘面板 -->
-  <div id="netdisk" class="slide-panel">
+  <!-- 网盘（全屏） -->
+  <div id="netdisk">
     <div class="panel-head">
       <button id="btnNetdiskBack" class="icon-btn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
@@ -333,7 +331,6 @@
     <div id="viewerCap"></div>
   </div>
 
-  <!-- 聊天菜单 -->
   <div id="chatMenu" class="menu"></div>
   <div id="toast"></div>
 
