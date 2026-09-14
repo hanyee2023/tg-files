@@ -411,34 +411,63 @@
         if (typeof url === 'string' && shouldRewrite(url)) {
           try {
             var u = new URL(url);
-            // 去掉端口号：vesta.web.telegram.org:443 → vesta.web.telegram.org
             var cleanHost = u.hostname;
             var newUrl = 'wss://' + PROXY + '/' + cleanHost + u.pathname + u.search;
             console.log('[Proxy] WS rewrite:', url, '->', newUrl);
-            // 关键：不传 protocols 参数！
-            // Cloudflare Workers WebSocketPair 不支持协议协商
-            // GramJS 传的 'binary' 会导致握手失败
-            var ws = new OrigWS(newUrl);
-            // 添加调试日志：监听 Worker 发回的错误信息
-            ws.addEventListener('message', function(ev) {
-              try {
-                var data = ev.data;
-                if (typeof data === 'string' && data.indexOf('{"error"') === 0) {
-                  var err = JSON.parse(data);
-                  console.error('[Proxy] Worker error:', JSON.stringify(err));
+            // 不传 protocols：CF Workers WebSocketPair 不支持协议协商
+            var realWs = new OrigWS(newUrl);
+            
+            // 创建代理对象，拦截 Worker 发来的诊断字符串消息
+            // 只把二进制数据转发给 GramJS
+            var proxyWs = new EventTarget();
+            (function() {
+              var props = ['readyState','bufferedAmount','extensions','protocol','url'];
+              for (var i = 0; i < props.length; i++) {
+                (function(p) {
+                  Object.defineProperty(proxyWs, p, { get: function() { return realWs[p]; } });
+                })(props[i]);
+              }
+              Object.defineProperty(proxyWs, 'binaryType', {
+                get: function() { return realWs.binaryType; },
+                set: function(v) { realWs.binaryType = v; }
+              });
+            })();
+            proxyWs.send = function(data) { return realWs.send(data); };
+            proxyWs.close = function(code, reason) { return realWs.close(code, reason); };
+            
+            var fwd = function(type) {
+              realWs.addEventListener(type, function(ev) {
+                var newEv;
+                if (type === 'message') {
+                  if (typeof ev.data === 'string' && ev.data.charAt(0) === '{') {
+                    try {
+                      var diag = JSON.parse(ev.data);
+                      if (diag.error) console.error('[Proxy] Worker error:', diag);
+                      else if (diag.status) console.log('[Proxy] Worker status:', diag.status, diag);
+                    } catch(e) { console.log('[Proxy] Worker msg:', ev.data); }
+                    return;
+                  }
+                  newEv = new MessageEvent('message', { data: ev.data });
+                } else if (type === 'close') {
+                  newEv = new CloseEvent('close', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean });
+                } else {
+                  newEv = new Event(type);
                 }
-              } catch(e) {}
-            });
-            ws.addEventListener('open', function() {
-              console.log('[Proxy] WS connected to proxy');
-            });
-            ws.addEventListener('error', function(e) {
-              console.error('[Proxy] WS error:', e);
-            });
-            ws.addEventListener('close', function(e) {
-              console.log('[Proxy] WS closed:', e.code, e.reason);
-            });
-            return ws;
+                proxyWs.dispatchEvent(newEv);
+                var h = proxyWs['on' + type];
+                if (typeof h === 'function') h(newEv);
+              });
+            };
+            fwd('open');
+            fwd('message');
+            fwd('close');
+            fwd('error');
+            
+            console.log('[Proxy] WS connected to proxy');
+            realWs.addEventListener('error', function(e) { console.error('[Proxy] WS error', e); });
+            realWs.addEventListener('close', function(e) { console.log('[Proxy] WS closed', e.code, e.reason); });
+            
+            return proxyWs;
           } catch(e) {
             console.error('[Proxy] WS rewrite error:', e);
           }
