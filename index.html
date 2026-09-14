@@ -390,13 +390,15 @@
     }
   </style>
   <script>
-    // 代理 patch —— 必须在所有模块加载前执行，否则 GramJS 会捕获原始 WebSocket 引用
-    // 优先使用 localStorage 配置，其次使用硬编码域名
+    // 代理 patch —— 必须在所有模块加载前执行
+    // 只重写 URL，返回真实 WebSocket 对象（不创建代理对象）
+    // v19 Worker 使用 raw TCP 转发，不会发送诊断字符串消息
     (function() {
+      if (self.__TG_PROXY_PATCHED) return;
       var PROXY = localStorage.getItem('tg_proxy') || 'web.reader.cc.cd';
       if (!PROXY) { console.warn('[Proxy] 未配置代理域名'); return; }
-
-      console.log('[Proxy] 注入代理 patch:', PROXY);
+      self.__TG_PROXY_PATCHED = true;
+      console.log('[Proxy] patch:', PROXY);
 
       function shouldRewrite(urlStr) {
         try {
@@ -405,71 +407,18 @@
         } catch (e) { return false; }
       }
 
-      // Patch WebSocket
+      // Patch WebSocket — 只重写 URL，返回真实 WebSocket
       var OrigWS = self.WebSocket;
       self.WebSocket = function(url, protocols) {
         if (typeof url === 'string' && shouldRewrite(url)) {
           try {
             var u = new URL(url);
-            var cleanHost = u.hostname;
-            var newUrl = 'wss://' + PROXY + '/' + cleanHost + u.pathname + u.search;
-            console.log('[Proxy] WS rewrite:', url, '->', newUrl);
+            var newUrl = 'wss://' + PROXY + '/' + u.hostname + u.pathname + u.search;
+            console.log('[Proxy] WS:', url, '->', newUrl);
             // 不传 protocols：CF Workers WebSocketPair 不支持协议协商
-            var realWs = new OrigWS(newUrl);
-            
-            // 创建代理对象，拦截 Worker 发来的诊断字符串消息
-            // 只把二进制数据转发给 GramJS
-            var proxyWs = new EventTarget();
-            (function() {
-              var props = ['readyState','bufferedAmount','extensions','protocol','url'];
-              for (var i = 0; i < props.length; i++) {
-                (function(p) {
-                  Object.defineProperty(proxyWs, p, { get: function() { return realWs[p]; } });
-                })(props[i]);
-              }
-              Object.defineProperty(proxyWs, 'binaryType', {
-                get: function() { return realWs.binaryType; },
-                set: function(v) { realWs.binaryType = v; }
-              });
-            })();
-            proxyWs.send = function(data) { return realWs.send(data); };
-            proxyWs.close = function(code, reason) { return realWs.close(code, reason); };
-            
-            var fwd = function(type) {
-              realWs.addEventListener(type, function(ev) {
-                var newEv;
-                if (type === 'message') {
-                  if (typeof ev.data === 'string' && ev.data.charAt(0) === '{') {
-                    try {
-                      var diag = JSON.parse(ev.data);
-                      if (diag.error) console.error('[Proxy] Worker error:', diag);
-                      else if (diag.status) console.log('[Proxy] Worker status:', diag.status, diag);
-                    } catch(e) { console.log('[Proxy] Worker msg:', ev.data); }
-                    return;
-                  }
-                  newEv = new MessageEvent('message', { data: ev.data });
-                } else if (type === 'close') {
-                  newEv = new CloseEvent('close', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean });
-                } else {
-                  newEv = new Event(type);
-                }
-                proxyWs.dispatchEvent(newEv);
-                var h = proxyWs['on' + type];
-                if (typeof h === 'function') h(newEv);
-              });
-            };
-            fwd('open');
-            fwd('message');
-            fwd('close');
-            fwd('error');
-            
-            console.log('[Proxy] WS connected to proxy');
-            realWs.addEventListener('error', function(e) { console.error('[Proxy] WS error', e); });
-            realWs.addEventListener('close', function(e) { console.log('[Proxy] WS closed', e.code, e.reason); });
-            
-            return proxyWs;
+            return new OrigWS(newUrl);
           } catch(e) {
-            console.error('[Proxy] WS rewrite error:', e);
+            console.error('[Proxy] WS rewrite error', e);
           }
         }
         return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
@@ -488,7 +437,6 @@
           try {
             var u = new URL(s, location.href);
             var n = 'https://' + PROXY + '/' + u.hostname + u.pathname + u.search;
-            console.log('[Proxy] Fetch rewrite:', s, '->', n);
             input = typeof input === 'string' ? n : new Request(n, input);
           } catch(e) {}
         }
@@ -504,9 +452,7 @@
           if (shouldRewrite(url)) {
             try {
               var u = new URL(url, location.href);
-              var n = 'https://' + PROXY + '/' + u.hostname + u.pathname + u.search;
-              console.log('[Proxy] XHR rewrite:', url, '->', n);
-              url = n;
+              url = 'https://' + PROXY + '/' + u.hostname + u.pathname + u.search;
             } catch(e) {}
           }
           return origOpen.call(xhr, method, url, async !== false, user, password);
@@ -519,11 +465,9 @@
       self.XMLHttpRequest.LOADING = OrigXHR.LOADING;
       self.XMLHttpRequest.OPENED = OrigXHR.OPENED;
       self.XMLHttpRequest.UNSENT = OrigXHR.UNSENT;
-
-      console.log('[Proxy] WebSocket, fetch, XHR patch 完成');
     })();
   </script>
-  <script type="module" src="/src/main.js"></script>
+  <script type="module" crossorigin src="/assets/index-D-r2KLSQ.js"></script>
 </head>
 <body>
   <!-- 首屏加载 -->
