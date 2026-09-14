@@ -1,0 +1,16 @@
+{
+  "name": "tg-files",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "telegram": "^2.22.2",
+    "buffer": "^6.0.3"
+  },
+  "devDependencies": {
+    "vite": "^5.4.8",
+    "vite-plugin-node-polyfills": "^0.22.0"
+  }
+}
