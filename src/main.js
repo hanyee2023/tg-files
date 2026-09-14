@@ -56,6 +56,7 @@ const el = {
   chatMenu: $('chatMenu'), toast: $('toast'),
   mediaBrowser: $('mediaBrowser'), mediaBrowserGrid: $('mediaBrowserGrid'),
   mediaBrowserTitle: $('mediaBrowserTitle'), mediaBrowserClose: $('mediaBrowserClose'),
+  btnNetdiskView: $('btnNetdiskView'), btnMediaView: $('btnMediaView'),
 };
 
 // ===== 状态 =====
@@ -64,12 +65,17 @@ let currentMediaList = [], netdiskChannel = null, netdiskMediaList = [];
 let viewerList = null, viewerIndex = 0, viewerMode = 'chat';
 let selfMe = null;
 const senderCache = new Map();
-const mediaCache = new Map();   // 媒体缓存：key -> blob URL
+const mediaCache = new Map();   // 媒体缓存：key -> blob URL（缩略图 / 完整视频）
 let lazyObserver = null;
+let netdiskView = 'card', currentNetdiskCat = 'all';
+let mediaBrowserView = 'card', currentMediaBrowserType = 'video';
+let oldestId = null, loadingOlder = false;
+let lastFocusVideo = null;      // 当前正在播放/加载的视频消息，用于集中带宽
 
 // ===== 工具 =====
 const ICONS = {
   play: '<svg viewBox="0 0 24 24" fill="#fff"><path d="M8 5v14l11-7z"/></svg>',
+  playSmall: '<svg viewBox="0 0 24 24" fill="#fff" width="14" height="14"><path d="M8 5v14l11-7z"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>',
   share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5 8.6 10.5"/></svg>',
   view: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>',
@@ -108,7 +114,7 @@ function netdiskCategory(msg){
   if(info.type==='video')return 'video';
   if(info.type==='image')return 'image';
   if(info.type==='gif')return 'gif';
-  if(info.type==='audio')return null;
+  if(info.type==='audio')return 'audio';
   const ext=(info.name.split('.').pop()||'').toLowerCase();
   if(['apk','ipa','exe','dmg','deb','rpm','msi','app','xapk'].includes(ext))return 'software';
   return 'document';
@@ -161,13 +167,39 @@ function applyThumb(node,url){
   if(ph){ph.style.backgroundImage=`url(${url})`;}
   else {node.style.backgroundImage=`url(${url})`;node.style.backgroundSize='cover';node.style.backgroundPosition='center';}
 }
+// 从完整视频中提取首帧（用于没有服务端缩略图的视频，如本应用早期发送的文件型视频）
+function extractFirstFrame(buf,mime){
+  return new Promise((resolve)=>{
+    try{
+      const url=URL.createObjectURL(new Blob([buf],{type:mime}));
+      const v=document.createElement('video');v.muted=true;v.preload='metadata';v.src=url;v.crossOrigin='anonymous';
+      let done=false;const ok=(r)=>{if(done)return;done=true;URL.revokeObjectURL(url);resolve(r);};
+      v.onloadeddata=()=>{try{v.currentTime=0.1;}catch(e){}};
+      v.onseeked=()=>{try{const c=document.createElement('canvas');c.width=v.videoWidth||320;c.height=v.videoHeight||180;c.getContext('2d').drawImage(v,0,0,c.width,c.height);ok(c.toDataURL('image/jpeg',0.7));}catch(e){ok(null);}};
+      v.onerror=()=>ok(null);
+      setTimeout(()=>ok(null),9000);
+    }catch(e){resolve(null);}
+  });
+}
 async function loadThumb(node,msg){
+  const info=mediaInfo(msg);
   const key=(node._cacheKey||(currentEntity?.id+':'+msg.id))+':thumb';
   if(mediaCache.has(key)){applyThumb(node,mediaCache.get(key));return;}
   try{
-    let buf=await client.downloadMedia(msg,{thumb:true});
-    if(!buf||!buf.length){const info=mediaInfo(msg);if(info&&info.type==='photo')buf=await client.downloadMedia(msg);}
-    if(buf&&buf.length){const url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));mediaCache.set(key,url);applyThumb(node,url);}
+    let url=null;
+    if(info&&info.type==='photo'){
+      let buf=await client.downloadMedia(msg,{thumb:true});
+      if(!buf||!buf.length)buf=await client.downloadMedia(msg);
+      if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
+    }else if(info&&info.type==='video'){
+      let buf=await client.downloadMedia(msg,{thumb:true});   // 服务端缩略图即首帧
+      if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
+      else{const fb=await client.downloadMedia(msg);if(fb&&fb.length)url=await extractFirstFrame(fb,info.mime);}
+    }else if(info&&info.type==='gif'){
+      let buf=await client.downloadMedia(msg,{thumb:true});
+      if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
+    }
+    if(url){mediaCache.set(key,url);applyThumb(node,url);}
   }catch(e){}
 }
 
@@ -210,7 +242,8 @@ function showAccount(me){
   if(!me)return;
   el.accName.textContent=[me.firstName,me.lastName].filter(Boolean).join(' ')||me.username||'用户';
   el.accSub.textContent=me.username?('@'+me.username):(me.phone||'');
-  if(typeof me.id==='number'){client&&client.getEntity(me).then(e=>loadAvatarInto(el.accAvatar,e)).catch(()=>{});}
+  // me 本身即 User 对象（含 photo），直接用它加载头像，避免 getEntity 在大整数 ID 下偶发失败
+  if(client)loadAvatarInto(el.accAvatar,me);
 }
 
 // ===== 对话列表（全部显示头像，贴近官方）=====
@@ -273,9 +306,29 @@ async function loadMessages(){
     const msgs=await client.getMessages(currentEntity,{limit:40});
     el.messages.innerHTML='';currentMediaList=[];
     for(const m of msgs.reverse())await appendMessage(m,false);
+    oldestId=msgs.length?msgs[0].id:null;
+    loadingOlder=false;
     el.messages.scrollTop=el.messages.scrollHeight;
   }catch(e){toast('加载消息失败：'+e.message);}
 }
+// 向上滚动加载更早的历史消息
+async function loadOlder(){
+  if(loadingOlder||!oldestId)return;
+  loadingOlder=true;
+  const prevH=el.messages.scrollHeight;
+  const prevTop=el.messages.scrollTop;
+  try{
+    const msgs=await client.getMessages(currentEntity,{limit:40,offsetId:oldestId});
+    if(msgs&&msgs.length){
+      for(const m of msgs.reverse())await appendMessage(m,true);
+      oldestId=msgs[0].id;
+      // 保持滚动位置不跳动
+      el.messages.scrollTop=prevTop+(el.messages.scrollHeight-prevH);
+    }
+  }catch(e){toast('加载更早消息失败：'+e.message);}
+  loadingOlder=false;
+}
+el.messages.addEventListener('scroll',()=>{ if(el.messages.scrollTop<60) loadOlder(); });
 
 // ===== 渲染单条消息 =====
 async function appendMessage(msg, prepend){
@@ -299,15 +352,22 @@ async function appendMessage(msg, prepend){
     media._thumbMsg=msg;media._cacheKey=key;
     if(info.type==='photo'||info.type==='video'||info.type==='gif'){
       const ph=document.createElement('div');ph.className='lazy-ph';media.appendChild(ph);
-      if(info.type!=='photo'){const ov=document.createElement('div');ov.className='play-overlay';ov.innerHTML=ICONS.play;media.appendChild(ov);
-        if(info.size){const sz=document.createElement('div');sz.className='media-size';sz.textContent=fmtSize(info.size);media.appendChild(sz);}}
+      if(info.type==='video'){
+        // 左下角：圆形进度条 + 播放按钮 + 视频大小（去掉原来的居中大播放按钮）
+        const vb=document.createElement('div');vb.className='vbtn';
+        vb.innerHTML=`<span class="vbtn-bg"><svg viewBox="0 0 36 36" width="30" height="30"><circle cx="18" cy="18" r="15" fill="rgba(0,0,0,.45)"/><circle class="cp" cx="18" cy="18" r="15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg><span class="vplay">${ICONS.playSmall}</span></span>${info.size?`<span class="vsize">${fmtSize(info.size)}</span>`:''}`;
+        media.appendChild(vb);
+      }else if(info.type==='gif'){
+        const ov=document.createElement('div');ov.className='play-overlay';ov.innerHTML=ICONS.play;media.appendChild(ov);
+      }
       ensureObserver();lazyObserver.observe(media);
     }else{
       const fc=document.createElement('div');fc.className='file-card';
       fc.innerHTML=`<div class="fi">${ICONS.file}</div><div style="min-width:0"><div class="fn">${escapeHtml(info.name)}</div><div class="fs">${fmtSize(info.size)}</div></div>`;
       media.appendChild(fc);
     }
-    bubble.appendChild(media);currentMediaList.push(msg);
+    bubble.appendChild(media);
+    if(prepend)currentMediaList.unshift(msg);else currentMediaList.push(msg);
   }
   const acts=document.createElement('div');acts.className='msg-actions';
   acts.innerHTML=`<button class="act-btn" data-act="view" title="查看">${ICONS.view}</button><button class="act-btn" data-act="download" title="下载">${ICONS.download}</button><button class="act-btn" data-act="share" title="分享">${ICONS.share}</button><button class="act-btn del" data-act="delete" title="删除">${ICONS.del}</button>`;
@@ -327,6 +387,8 @@ el.messages.addEventListener('click',async(e)=>{
     else if(act==='share')shareMedia(msg);
     else if(act==='delete')deleteMessage(id);
     return;}
+  const vbtn=e.target.closest('.vbtn');
+  if(vbtn){const host=vbtn.closest('.msg-media');const id=parseInt(vbtn.closest('.msg').dataset.id);const msg=currentMediaList.find(m=>m.id===id);if(msg)playVideo(host,msg);return;}
   const play=e.target.closest('.play-overlay');
   if(play){const host=play.closest('.msg-media');const id=parseInt(play.closest('.msg').dataset.id);const msg=currentMediaList.find(m=>m.id===id);if(msg)playVideo(host,msg);return;}
   const media=e.target.closest('.msg-media');
@@ -334,15 +396,15 @@ el.messages.addEventListener('click',async(e)=>{
 });
 async function findMsg(id){try{const m=await client.getMessages(currentEntity,{ids:[id]});return m[0];}catch(e){return null;}}
 
-// 视频：保持卡片尺寸，进度条覆盖在缩略图上（带缓存）
+// 视频：保持卡片尺寸，圆形进度条随下载进度填充（带缓存，播放/下载过的直接复用）
 async function playVideo(host,msg){
+  lastFocusVideo=msg;   // 集中带宽加载本条视频
   const key=currentEntity.id+':'+msg.id+':full';
+  const vbtn=host.querySelector('.vbtn');const ring=vbtn?host.querySelector('.cp'):null;
   if(mediaCache.has(key)){const url=mediaCache.get(key);host.innerHTML=`<video controls autoplay src="${url}" style="width:100%;max-width:340px;border-radius:10px;background:#000;display:block;"></video>`;return;}
   const mime=(msg.video&&msg.video.mimeType)||(msg.document&&msg.document.mimeType)||'video/mp4';
-  let bar=host.querySelector('.progress');
-  if(!bar){bar=document.createElement('div');bar.className='progress';bar.innerHTML='<i></i>';host.appendChild(bar);}
   try{
-    const buf=await client.downloadMedia(msg,{progressCallback:p=>{const b=bar.querySelector('i');if(b)b.style.width=Math.round(p*100)+'%';}});
+    const buf=await client.downloadMedia(msg,{progressCallback:p=>{if(ring)ring.style.strokeDashoffset=String(94.2*(1-Math.max(0,Math.min(1,p))));}});
     if(!buf||!buf.length){host.innerHTML='❌ 播放失败';return;}
     const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
     host.innerHTML=`<video controls autoplay src="${url}" style="width:100%;max-width:340px;border-radius:10px;background:#000;display:block;"></video>`;
@@ -372,13 +434,25 @@ async function sendFiles(files){
   if(!currentEntity)return;
   for(const f of files){
     const isImage=/^image\//.test(f.type||'');
+    const isVideo=/^video\//.test(f.type||'');
     const card=document.createElement('div');card.className='up-card';card.style.pointerEvents='auto';
     const circ=makeCircle();const name=document.createElement('div');name.className='up-name';name.textContent=f.name;
     card.append(circ.el,name);getUploads().appendChild(card);
     try{
       const arrBuf=await f.arrayBuffer();
       const cf=new CustomFile(f.name,arrBuf.byteLength,'',arrBuf);
-      const m=await client.sendFile(currentEntity,{file:cf,forceDocument:!isImage,caption:f.name,progressCallback:p=>circ.set(p)});
+      const opts={file:cf,progressCallback:p=>circ.set(p)};
+      if(isVideo){
+        // 作为视频发送（官方会识别为视频类型，且支持流式播放）
+        opts.mimeType=f.type||'video/mp4';
+        opts.supportsStreaming=true;
+        opts.attributes=[new Api.DocumentAttributeVideo({duration:0,w:0,h:0,supportsStreaming:true})];
+      }else if(isImage){
+        // 作为图片发送（自动识别）
+      }else{
+        opts.forceDocument=true;   // 其它文件作为文档
+      }
+      const m=await client.sendFile(currentEntity,opts);
       card.remove();
       if(m)appendMessage(m,false);
       el.messages.scrollTop=el.messages.scrollHeight;
@@ -451,7 +525,9 @@ document.addEventListener('keydown',e=>{if(!el.viewer.classList.contains('open')
 el.mediaBrowserClose.onclick=()=>el.mediaBrowser.classList.remove('open');
 async function openMediaBrowser(type){
   if(!currentEntity)return;
+  currentMediaBrowserType=type;
   el.mediaBrowserTitle.textContent=(type==='video'?'全部视频':type==='image'?'全部图片':'媒体');
+  el.mediaBrowserGrid.className=mediaBrowserView==='list'?'list-mode':'';
   el.mediaBrowserGrid.innerHTML='<div class="loading-spinner"></div>';
   el.mediaBrowser.classList.add('open');
   try{
@@ -463,16 +539,28 @@ async function openMediaBrowser(type){
     el.mediaBrowserGrid.innerHTML='';
     if(!list.length){el.mediaBrowserGrid.innerHTML='<div class="empty-hint">暂无</div>';return;}
     list.forEach((msg,i)=>{
-      const card=document.createElement('div');card.className='mb-card';
-      const th=document.createElement('div');th.className='mb-thumb';
       const info=mediaInfo(msg);
-      if(info.type==='video'||info.type==='gif')th.classList.add('play');
-      th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;
-      const nm=document.createElement('div');nm.className='nk-name';nm.textContent=info.name;
-      card.append(th,nm);
-      card.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser');};
-      el.mediaBrowserGrid.appendChild(card);
-      if(th._thumbMsg){ensureObserver();lazyObserver.observe(th);}
+      if(mediaBrowserView==='list'){
+        const row=document.createElement('div');row.className='nk-row';
+        const th=document.createElement('div');th.className='nk-thumb sm';
+        if(info.type==='video')th.classList.add('play');else if(info.type!=='photo'&&info.type!=='gif')th.innerHTML=ICONS.file;
+        th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;
+        const meta=document.createElement('div');meta.className='nk-meta';
+        meta.innerHTML=`<div class="nk-name">${escapeHtml(info.name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
+        row.append(th,meta);row.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser');};
+        el.mediaBrowserGrid.appendChild(row);
+        if(th._thumbMsg)loadThumb(th,msg);
+      }else{
+        const card=document.createElement('div');card.className='mb-card';
+        const th=document.createElement('div');th.className='mb-thumb';
+        if(info.type==='video'||info.type==='gif')th.classList.add('play');
+        th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;
+        const nm=document.createElement('div');nm.className='nk-name';nm.textContent=info.name;
+        card.append(th,nm);
+        card.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser');};
+        el.mediaBrowserGrid.appendChild(card);
+        if(th._thumbMsg)loadThumb(th,msg);
+      }
     });
   }catch(e){el.mediaBrowserGrid.innerHTML='<div class="empty-hint">加载失败</div>';}
 }
@@ -557,38 +645,58 @@ el.btnEnterNetdisk.onclick=()=>{
 };
 el.btnNetdiskBack.onclick=el.btnNetdiskClose.onclick=()=>el.netdisk.classList.remove('open');
 el.netdiskTabs.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;el.netdiskTabs.querySelectorAll('button').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');loadNetdisk(b.dataset.cat);});
+el.btnNetdiskView.onclick=()=>{netdiskView=netdiskView==='card'?'list':'card';el.btnNetdiskView.textContent=netdiskView==='card'?'☰ 列表':'▦ 卡片';renderNetdisk(currentNetdiskCat);};
+el.btnMediaView.onclick=()=>{mediaBrowserView=mediaBrowserView==='card'?'list':'card';el.btnMediaView.textContent=mediaBrowserView==='card'?'☰ 列表':'▦ 卡片';openMediaBrowser(currentMediaBrowserType);};
 async function loadNetdisk(cat){
   if(!netdiskChannel)return;
+  currentNetdiskCat=cat;
   el.netdiskGrid.innerHTML='<div class="loading-spinner"></div>';
-  try{const msgs=await client.getMessages(netdiskChannel,{limit:80});netdiskMediaList=msgs.filter(m=>mediaInfo(m));renderNetdisk(cat);}
+  try{const msgs=await client.getMessages(netdiskChannel,{limit:100});netdiskMediaList=msgs.filter(m=>mediaInfo(m));renderNetdisk(cat);}
   catch(e){el.netdiskGrid.innerHTML='<div class="empty-hint">加载失败：'+e.message+'</div>';}
 }
 function renderNetdisk(cat){
   const list=cat==='all'?netdiskMediaList:netdiskMediaList.filter(m=>netdiskCategory(m)===cat);
+  el.netdiskGrid.className=netdiskView==='list'?'list-mode':'';
   el.netdiskGrid.innerHTML='';
   if(!list.length){el.netdiskGrid.innerHTML='<div class="empty-hint">暂无文件</div>';return;}
   const chName=chatName(netdiskChannel);
   list.forEach((msg,i)=>{
-    const info=mediaInfo(msg);const card=document.createElement('div');card.className='nk-card';
-    const nameBar=document.createElement('div');nameBar.className='nk-name-bar';nameBar.textContent=chName;
-    const th=document.createElement('div');th.className='nk-thumb';
-    const key=netdiskChannel.id+':'+msg.id;
-    th._thumbMsg=msg;th._cacheKey=key;
-    if(info.type==='photo'||info.type==='gif'){}
-    else if(info.type==='video')th.classList.add('play');
-    else th.innerHTML=ICONS.file;
-    const nm=document.createElement('div');nm.className='nk-name';nm.textContent=info.name;
-    card.append(nameBar,th,nm);card.onclick=()=>openViewer(list,i,'netdisk');
-    el.netdiskGrid.appendChild(card);
-    if(th._thumbMsg){ensureObserver();lazyObserver.observe(th);}
+    const info=mediaInfo(msg);
+    if(netdiskView==='list'){
+      const row=document.createElement('div');row.className='nk-row';
+      const th=document.createElement('div');th.className='nk-thumb sm';
+      th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;
+      if(info.type==='video')th.classList.add('play');else if(info.type!=='photo'&&info.type!=='gif')th.innerHTML=ICONS.file;
+      const meta=document.createElement('div');meta.className='nk-meta';
+      meta.innerHTML=`<div class="nk-name">${escapeHtml(info.name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
+      row.append(th,meta);row.onclick=()=>openViewer(list,i,'netdisk');
+      el.netdiskGrid.appendChild(row);
+      if(th._thumbMsg)loadThumb(th,msg);   // 立即加载，确保移动端也能显示
+    }else{
+      const card=document.createElement('div');card.className='nk-card';
+      const nameBar=document.createElement('div');nameBar.className='nk-name-bar';nameBar.textContent=chName;
+      const th=document.createElement('div');th.className='nk-thumb';
+      th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;
+      if(info.type==='video')th.classList.add('play');else if(info.type!=='photo'&&info.type!=='gif')th.innerHTML=ICONS.file;
+      const nm=document.createElement('div');nm.className='nk-name';nm.textContent=info.name;
+      card.append(nameBar,th,nm);card.onclick=()=>openViewer(list,i,'netdisk');
+      el.netdiskGrid.appendChild(card);
+      if(th._thumbMsg)loadThumb(th,msg);
+    }
   });
 }
 el.btnNetdiskUpload.onclick=()=>el.netdiskFileInput.click();
 el.netdiskFileInput.addEventListener('change',async(e)=>{
   if(!netdiskChannel)return;
   for(const f of e.target.files){
-    try{const isImage=/^image\//.test(f.type||'');const arrBuf=await f.arrayBuffer();const cf=new CustomFile(f.name,arrBuf.byteLength,'',arrBuf);
-      await client.sendFile(netdiskChannel,{file:cf,forceDocument:!isImage,caption:f.name});
+    try{
+      const isImage=/^image\//.test(f.type||'');const isVideo=/^video\//.test(f.type||'');
+      const arrBuf=await f.arrayBuffer();const cf=new CustomFile(f.name,arrBuf.byteLength,'',arrBuf);
+      const opts={file:cf};
+      if(isVideo){opts.mimeType=f.type||'video/mp4';opts.supportsStreaming=true;opts.attributes=[new Api.DocumentAttributeVideo({duration:0,w:0,h:0,supportsStreaming:true})];}
+      else if(isImage){}
+      else {opts.forceDocument=true;}
+      await client.sendFile(netdiskChannel,opts);
     }catch(err){toast('上传失败：'+(err&&err.message?err.message:err));}
   }
   e.target.value='';loadNetdisk(el.netdiskTabs.querySelector('.sel').dataset.cat);
