@@ -418,8 +418,30 @@
             // 关键：不传 protocols 参数！
             // Cloudflare Workers WebSocketPair 不支持协议协商
             // GramJS 传的 'binary' 会导致握手失败
-            return new OrigWS(newUrl);
-          } catch(e) {}
+            var ws = new OrigWS(newUrl);
+            // 添加调试日志：监听 Worker 发回的错误信息
+            ws.addEventListener('message', function(ev) {
+              try {
+                var data = ev.data;
+                if (typeof data === 'string' && data.indexOf('{"error"') === 0) {
+                  var err = JSON.parse(data);
+                  console.error('[Proxy] Worker error:', JSON.stringify(err));
+                }
+              } catch(e) {}
+            });
+            ws.addEventListener('open', function() {
+              console.log('[Proxy] WS connected to proxy');
+            });
+            ws.addEventListener('error', function(e) {
+              console.error('[Proxy] WS error:', e);
+            });
+            ws.addEventListener('close', function(e) {
+              console.log('[Proxy] WS closed:', e.code, e.reason);
+            });
+            return ws;
+          } catch(e) {
+            console.error('[Proxy] WS rewrite error:', e);
+          }
         }
         return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
       };
