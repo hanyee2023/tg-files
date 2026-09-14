@@ -126,11 +126,18 @@
   #detailsContent .d-name{font-size:18px;font-weight:700;margin-top:8px;}
   #detailsContent .d-sub{font-size:13px;color:var(--tg-sub);}
   #detailsContent .d-about{font-size:13px;color:var(--tg-text);text-align:center;opacity:.85;margin-top:8px;line-height:1.5;}
-  .d-stat{display:flex;width:100%;justify-content:space-around;margin-top:16px;padding-top:16px;border-top:1px solid var(--tg-border);}
-  .d-stat b{display:block;font-size:16px;text-align:center;}
-  .d-stat span{font-size:11px;color:var(--tg-sub);}
-  .d-stat .clickable{cursor:pointer;}
-  .d-stat .clickable:hover b{color:var(--tg-blue);}
+  .d-stat{display:flex;width:100%;flex-direction:column;margin-top:12px;padding-top:12px;border-top:1px solid var(--tg-border);gap:2px;}
+  .d-stat .stat-row{display:flex;align-items:center;justify-content:space-between;padding:9px 10px;border-radius:8px;transition:.12s;}
+  .d-stat .stat-row:hover{background:var(--tg-hover);}
+  .d-stat .stat-row.clickable{cursor:pointer;}
+  .d-stat .stat-label{display:flex;align-items:center;gap:10px;font-size:14px;color:var(--tg-text);}
+  .d-stat .stat-label svg{width:18px;height:18px;color:var(--tg-sub);}
+  .d-stat .stat-val{font-size:15px;font-weight:700;color:var(--tg-text);}
+  .d-stat .stat-row.clickable:hover .stat-val{color:var(--tg-blue);}
+  .d-stat .stat-sub{font-size:11px;color:var(--tg-sub);text-align:right;}
+  .d-stat-more{width:100%;text-align:center;padding:8px 0;}
+  .d-stat-more button{font-size:13px;color:var(--tg-blue);font-weight:600;padding:6px 12px;border-radius:8px;}
+  .d-stat-more button:hover{background:var(--tg-hover);}
 
   /* 设置面板（左侧） */
   .slide-panel{position:fixed;top:0;left:0;height:100vh;width:340px;max-width:90vw;background:var(--tg-panel);box-shadow:4px 0 20px rgba(0,0,0,.18);z-index:60;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform .22s ease;}
@@ -288,6 +295,7 @@
         <div class="d-sub" id="dSub"></div>
         <div class="d-about" id="dAbout"></div>
         <div class="d-stat" id="dStat"></div>
+        <div class="d-stat-more" id="dStatMore"></div>
       </div>
     </aside>
   </div>
