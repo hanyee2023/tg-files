@@ -178,6 +178,10 @@ async function init(){
   injectMobileCss();
   setupDetailsClose();
   const sessionStr=localStorage.getItem('tg_session')||'';
+  if(!API_ID || !API_HASH){
+    el.messages.innerHTML='<div class="empty-hint">未配置 API_ID / API_HASH。请在 Cloudflare Pages 的环境变量中设置 VITE_API_ID、VITE_API_HASH、VITE_PROXY_DOMAIN，然后重新部署。</div>';
+    toast('缺少 API 配置'); return;
+  }
   client=new TelegramClient(new StringSession(sessionStr),API_ID,API_HASH,{connectionRetries:5,retryDelay:2000,useWSS:true,networkSocket:ProxiedWebSockets});
   client.addEventHandler(onNewMessage,new NewMessage({}));
   const saved=localStorage.getItem('tg_self');
