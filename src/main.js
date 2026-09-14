@@ -38,8 +38,22 @@ function applyRuntimeProxy() {
         url = `wss://${CFG.proxyDomain}/${cleanHost}${u.pathname}${u.search}`;
         console.log('[Proxy] WS rewrite ->', url);
         // 不传 protocols：CF Workers WebSocketPair 不支持协议协商
-        return new OrigWS(url);
-      } catch (e) {}
+        const ws = new OrigWS(url);
+        // 调试日志
+        ws.addEventListener('open', () => console.log('[Proxy] WS connected'));
+        ws.addEventListener('error', (e) => console.error('[Proxy] WS error', e));
+        ws.addEventListener('close', (e) => console.log('[Proxy] WS closed', e.code, e.reason));
+        ws.addEventListener('message', (ev) => {
+          try {
+            if (typeof ev.data === 'string' && ev.data.startsWith('{"error"')) {
+              console.error('[Proxy] Worker error:', ev.data);
+            }
+          } catch (e) {}
+        });
+        return ws;
+      } catch (e) {
+        console.error('[Proxy] WS rewrite error', e);
+      }
     }
     return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
   };

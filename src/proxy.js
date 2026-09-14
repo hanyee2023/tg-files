@@ -43,7 +43,19 @@ if (PROXY_DOMAIN) {
       console.log('[Proxy] WS rewrite:', url, '->', newUrl);
       // 不传 protocols：CF Workers WebSocketPair 不支持协议协商
       // GramJS 传的 'binary' 会导致握手失败
-      return new OrigWS(newUrl);
+      const ws = new OrigWS(newUrl);
+      // 调试日志
+      ws.addEventListener('open', () => console.log('[Proxy] WS connected'));
+      ws.addEventListener('error', (e) => console.error('[Proxy] WS error', e));
+      ws.addEventListener('close', (e) => console.log('[Proxy] WS closed', e.code, e.reason));
+      ws.addEventListener('message', (ev) => {
+        try {
+          if (typeof ev.data === 'string' && ev.data.startsWith('{"error"')) {
+            console.error('[Proxy] Worker error:', ev.data);
+          }
+        } catch (e) {}
+      });
+      return ws;
     }
     return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
   };

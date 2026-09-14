@@ -37,8 +37,21 @@ function applyProxyPatchFromLS() {
         url = `wss://${CFG.proxyDomain}/${cleanHost}${u.pathname}${u.search}`;
         console.log('[Proxy LS] WS:', cleanHost, '->', url);
         // 不传 protocols：CF Workers WebSocketPair 不支持协议协商
-        return new OrigWS(url);
-      } catch (e) {}
+        const ws = new OrigWS(url);
+        ws.addEventListener('open', () => console.log('[Proxy LS] WS connected'));
+        ws.addEventListener('error', (e) => console.error('[Proxy LS] WS error', e));
+        ws.addEventListener('close', (e) => console.log('[Proxy LS] WS closed', e.code, e.reason));
+        ws.addEventListener('message', (ev) => {
+          try {
+            if (typeof ev.data === 'string' && ev.data.startsWith('{"error"')) {
+              console.error('[Proxy LS] Worker error:', ev.data);
+            }
+          } catch (e) {}
+        });
+        return ws;
+      } catch (e) {
+        console.error('[Proxy LS] WS rewrite error', e);
+      }
     }
     return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
   };
