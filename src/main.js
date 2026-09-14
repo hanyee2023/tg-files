@@ -35,22 +35,47 @@ function applyRuntimeProxy() {
       try {
         const u = new URL(url);
         const cleanHost = u.hostname;
-        url = `wss://${CFG.proxyDomain}/${cleanHost}${u.pathname}${u.search}`;
-        console.log('[Proxy] WS rewrite ->', url);
+        const newUrl = `wss://${CFG.proxyDomain}/${cleanHost}${u.pathname}${u.search}`;
+        console.log('[Proxy] WS rewrite ->', newUrl);
         // 不传 protocols：CF Workers WebSocketPair 不支持协议协商
-        const ws = new OrigWS(url);
-        // 调试日志
-        ws.addEventListener('open', () => console.log('[Proxy] WS connected'));
-        ws.addEventListener('error', (e) => console.error('[Proxy] WS error', e));
-        ws.addEventListener('close', (e) => console.log('[Proxy] WS closed', e.code, e.reason));
-        ws.addEventListener('message', (ev) => {
-          try {
-            if (typeof ev.data === 'string' && ev.data.startsWith('{"error"')) {
-              console.error('[Proxy] Worker error:', ev.data);
-            }
-          } catch (e) {}
+        const realWs = new OrigWS(newUrl);
+        
+        // 创建代理对象，拦截 Worker 诊断字符串消息，只转发二进制数据给 GramJS
+        const proxyWs = new EventTarget();
+        for (const p of ['readyState','bufferedAmount','extensions','protocol','url']) {
+          Object.defineProperty(proxyWs, p, { get: () => realWs[p] });
+        }
+        Object.defineProperty(proxyWs, 'binaryType', {
+          get: () => realWs.binaryType, set: (v) => { realWs.binaryType = v; }
         });
-        return ws;
+        proxyWs.send = (data) => realWs.send(data);
+        proxyWs.close = (code, reason) => realWs.close(code, reason);
+        
+        for (const type of ['open','message','close','error']) {
+          realWs.addEventListener(type, (ev) => {
+            let newEv;
+            if (type === 'message') {
+              if (typeof ev.data === 'string' && ev.data.charAt(0) === '{') {
+                try {
+                  const d = JSON.parse(ev.data);
+                  if (d.error) console.error('[Proxy] Worker error:', d);
+                  else if (d.status) console.log('[Proxy] Worker status:', d.status, d);
+                } catch(e) { console.log('[Proxy] Worker msg:', ev.data); }
+                return;
+              }
+              newEv = new MessageEvent('message', { data: ev.data });
+            } else if (type === 'close') {
+              newEv = new CloseEvent('close', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean });
+            } else { newEv = new Event(type); }
+            proxyWs.dispatchEvent(newEv);
+            const h = proxyWs['on' + type];
+            if (typeof h === 'function') h(newEv);
+          });
+        }
+        console.log('[Proxy] WS connected');
+        realWs.addEventListener('error', (e) => console.error('[Proxy] WS error', e));
+        realWs.addEventListener('close', (e) => console.log('[Proxy] WS closed', e.code, e.reason));
+        return proxyWs;
       } catch (e) {
         console.error('[Proxy] WS rewrite error', e);
       }

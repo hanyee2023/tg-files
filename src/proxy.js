@@ -43,19 +43,73 @@ if (PROXY_DOMAIN) {
       console.log('[Proxy] WS rewrite:', url, '->', newUrl);
       // 不传 protocols：CF Workers WebSocketPair 不支持协议协商
       // GramJS 传的 'binary' 会导致握手失败
-      const ws = new OrigWS(newUrl);
-      // 调试日志
-      ws.addEventListener('open', () => console.log('[Proxy] WS connected'));
-      ws.addEventListener('error', (e) => console.error('[Proxy] WS error', e));
-      ws.addEventListener('close', (e) => console.log('[Proxy] WS closed', e.code, e.reason));
-      ws.addEventListener('message', (ev) => {
-        try {
-          if (typeof ev.data === 'string' && ev.data.startsWith('{"error"')) {
-            console.error('[Proxy] Worker error:', ev.data);
-          }
-        } catch (e) {}
+      const realWs = new OrigWS(newUrl);
+      
+      // 创建代理 WebSocket，拦截 Worker 发来的诊断字符串消息
+      // 只把二进制数据转发给 GramJS
+      const proxyWs = new EventTarget();
+      Object.defineProperty(proxyWs, 'readyState', { get: () => realWs.readyState });
+      Object.defineProperty(proxyWs, 'bufferedAmount', { get: () => realWs.bufferedAmount });
+      Object.defineProperty(proxyWs, 'extensions', { get: () => realWs.extensions });
+      Object.defineProperty(proxyWs, 'protocol', { get: () => realWs.protocol });
+      Object.defineProperty(proxyWs, 'binaryType', { 
+        get: () => realWs.binaryType, 
+        set: (v) => { realWs.binaryType = v; }
       });
-      return ws;
+      Object.defineProperty(proxyWs, 'url', { get: () => realWs.url });
+      proxyWs.send = (data) => realWs.send(data);
+      proxyWs.close = (code, reason) => realWs.close(code, reason);
+      
+      // 转发 realWs 事件到 proxyWs，但过滤掉诊断字符串消息
+      const forwardEvent = (type) => {
+        realWs.addEventListener(type, (ev) => {
+          let newEv;
+          if (type === 'message') {
+            // 检查是否是 Worker 发来的诊断消息（JSON 字符串）
+            if (typeof ev.data === 'string' && (ev.data.startsWith('{"') || ev.data.startsWith('[Proxy'))) {
+              try {
+                const diag = JSON.parse(ev.data);
+                if (diag.error) {
+                  console.error('[Proxy] Worker error:', diag);
+                } else if (diag.status) {
+                  console.log('[Proxy] Worker status:', diag.status, diag);
+                }
+              } catch (e) {
+                console.log('[Proxy] Worker msg:', ev.data);
+              }
+              return; // 不转发诊断消息给 GramJS
+            }
+            newEv = new MessageEvent('message', { data: ev.data });
+          } else if (type === 'close') {
+            newEv = new CloseEvent('close', { code: ev.code, reason: ev.reason, wasClean: ev.wasClean });
+          } else {
+            newEv = new Event(type);
+          }
+          proxyWs.dispatchEvent(newEv);
+          // 同步调用 onXXX 回调
+          const handler = proxyWs['on' + type];
+          if (typeof handler === 'function') handler(newEv);
+        });
+      };
+      
+      forwardEvent('open');
+      forwardEvent('message');
+      forwardEvent('close');
+      forwardEvent('error');
+      
+      // addEventListener 支持
+      proxyWs.addEventListener = function(type, listener, options) {
+        return EventTarget.prototype.addEventListener.call(this, type, listener, options);
+      };
+      proxyWs.removeEventListener = function(type, listener, options) {
+        return EventTarget.prototype.removeEventListener.call(this, type, listener, options);
+      };
+      
+      console.log('[Proxy] WS connected');
+      realWs.addEventListener('error', (e) => console.error('[Proxy] WS error', e));
+      realWs.addEventListener('close', (e) => console.log('[Proxy] WS closed', e.code, e.reason));
+      
+      return proxyWs;
     }
     return protocols !== undefined ? new OrigWS(url, protocols) : new OrigWS(url);
   };
