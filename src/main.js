@@ -110,7 +110,7 @@ function toast(msg){el.toast.textContent=msg;el.toast.classList.add('show');clea
 // ===== 媒体识别 =====
 function mediaInfo(msg){
   const m=msg.media; if(!m)return null;
-  if(m.photo) return {type:'photo',name:'图片',size:0,mime:'image/jpeg'};
+  if(m.photo) return {type:'image',name:'图片',size:0,mime:'image/jpeg'};  // photo 归到图片类统计
   if(m.document){
     const d=m.document;
     const fn=d.attributes?.find(a=>a.className==='DocumentAttributeFilename')?.fileName||'文件';
@@ -202,17 +202,23 @@ async function loadThumb(node,msg){
   if(mediaCache.has(key)){applyThumb(node,mediaCache.get(key));return;}
   try{
     let url=null;
-    if(info.type==='photo'){
+    if(info.type==='image'){
       let buf=await client.downloadMedia(msg,{thumb:true});
       if(!buf||!buf.length)buf=await client.downloadMedia(msg);
       if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
     }else if(info.type==='video'){
       let buf=await client.downloadMedia(msg,{thumb:true});   // 服务端缩略图即首帧
+      if(!buf||!buf.length){
+        // 尝试常见缩略图尺寸
+        for(const sz of ['s','m','x','y']){
+          try{buf=await client.downloadMedia(msg,{thumb:sz});if(buf&&buf.length)break;}catch(e){}
+        }
+      }
       if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
       else{
-        // 无服务端缩略图时：尝试下载完整视频提取首帧（限时 8 秒，失败则放弃）
+        // 仍无缩略图时：尝试下载完整视频提取首帧（限时 6 秒，避免大视频长时间等待）
         try{
-          const fb=await Promise.race([client.downloadMedia(msg),new Promise((_,rej)=>setTimeout(()=>rej(new Error('thumb timeout')),8000))]);
+          const fb=await Promise.race([client.downloadMedia(msg),new Promise((_,rej)=>setTimeout(()=>rej(new Error('thumb timeout')),6000))]);
           if(fb&&fb.length)url=await extractFirstFrame(fb,info.mime);
         }catch(e){}
       }
@@ -372,7 +378,7 @@ async function appendMessage(msg, prepend){
     const media=document.createElement('div');media.className='msg-media';
     const key=currentEntity.id+':'+msg.id;
     media._thumbMsg=msg;media._cacheKey=key;
-    if(info.type==='photo'||info.type==='video'||info.type==='gif'){
+    if(info.type==='image'||info.type==='video'||info.type==='gif'){
       const ph=document.createElement('div');ph.className='lazy-ph';media.appendChild(ph);
       if(info.type==='video'){
         // 左下角：圆形进度条 + 播放按钮 + 视频大小（去掉原来的居中大播放按钮）
@@ -418,25 +424,62 @@ el.messages.addEventListener('click',async(e)=>{
 });
 async function findMsg(id){try{const m=await client.getMessages(currentEntity,{ids:[id]});return m[0];}catch(e){return null;}}
 
-// 视频：保持卡片尺寸，圆形进度条随下载进度填充（带缓存，播放/下载过的直接复用）
+// 自定义视频播放器：无默认 controls，左下角播放/暂停+圆形下载进度，底部蓝色进度条，右下角时间+静音
 async function playVideo(host,msg,entity){
   if(!entity)entity=currentEntity;
-  lastFocusVideo=msg;   // 集中带宽加载本条视频
+  lastFocusVideo=msg;
   const key=getMediaKey(entity,msg,'full');
-  const vbtn=host.querySelector('.vbtn');
-  const ring=vbtn?host.querySelector('.cp'):null;
-  const sizeSpan=vbtn?host.querySelector('.vsize'):null;
-  if(mediaCache.has(key)){const url=mediaCache.get(key);host.innerHTML=`<video controls autoplay src="${url}" style="width:100%;max-width:340px;border-radius:10px;background:#000;display:block;"></video>`;return;}
+  const info=mediaInfo(msg);
   const mime=(msg.video&&msg.video.mimeType)||(msg.document&&msg.document.mimeType)||'video/mp4';
+
+  host.innerHTML='';host.classList.add('playing');
+  const wrap=document.createElement('div');wrap.className='vp-wrap';
+  const v=document.createElement('video');v.className='vp-video';v.playsInline=true;v.preload='auto';
+  wrap.appendChild(v);
+
+  const ctrl=document.createElement('div');ctrl.className='vp-controls';
+  const left=document.createElement('div');left.className='vp-left';
+  const playBtn=document.createElement('button');playBtn.className='vp-play';
+  playBtn.innerHTML=`<span class="vp-icon">▶</span><span class="vp-ring"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="3"/><circle class="vp-ring-cp" cx="18" cy="18" r="15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg></span>`;
+  left.appendChild(playBtn);
+
+  const bar=document.createElement('div');bar.className='vp-bar';
+  const barFill=document.createElement('div');barFill.className='vp-bar-fill';
+  bar.appendChild(barFill);
+
+  const right=document.createElement('div');right.className='vp-right';
+  const time=document.createElement('span');time.className='vp-time';time.textContent='0:00';
+  const muteBtn=document.createElement('button');muteBtn.className='vp-mute';muteBtn.textContent='🔊';
+  right.append(time,muteBtn);
+
+  ctrl.append(left,bar,right);wrap.appendChild(ctrl);host.appendChild(wrap);
+
+  const cp=playBtn.querySelector('.vp-ring-cp');
+  const icon=playBtn.querySelector('.vp-icon');
+  wrap.addEventListener('click',e=>e.stopPropagation());   // 点击播放器控制条不触发消息查看器
+  function setLoadProgress(p){const pct=Math.max(0,Math.min(1,p));cp.style.strokeDashoffset=String(94.2*(1-pct));barFill.style.width=Math.round(pct*100)+'%';}
+  function fmtDur(s){if(!s||!isFinite(s))return '0:00';const m=Math.floor(s/60);const sec=Math.floor(s%60);return m+':'+String(sec).padStart(2,'0');}
+  function updateTime(){time.textContent='-'+fmtDur(Math.max(0,(v.duration||0)-v.currentTime));}
+  function syncIcon(){icon.textContent=v.paused?'▶':'⏸';}
+
+  playBtn.onclick=(e)=>{e.stopPropagation();if(v.paused){v.play();}else{v.pause();}};
+  muteBtn.onclick=(e)=>{e.stopPropagation();v.muted=!v.muted;muteBtn.textContent=v.muted?'🔇':'🔊';};
+  v.onclick=(e)=>{e.stopPropagation();if(v.paused)v.play();else v.pause();};
+  v.addEventListener('play',syncIcon);v.addEventListener('pause',syncIcon);
+  v.addEventListener('timeupdate',updateTime);v.addEventListener('loadedmetadata',updateTime);
+  v.addEventListener('ended',()=>{icon.textContent='↻';});
+
+  if(mediaCache.has(key)){
+    const url=mediaCache.get(key);v.src=url;setLoadProgress(1);
+    try{await v.play();}catch(e){}
+    return;
+  }
   try{
-    const buf=await client.downloadMedia(msg,{progressCallback:p=>{
-      const pct=Math.max(0,Math.min(1,p));
-      if(ring)ring.style.strokeDashoffset=String(94.2*(1-pct));
-      if(sizeSpan)sizeSpan.textContent=Math.round(pct*100)+'%';
-    }});
+    const buf=await client.downloadMedia(msg,{progressCallback:p=>setLoadProgress(p)});
     if(!buf||!buf.length){host.innerHTML='❌ 播放失败';return;}
     const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
-    host.innerHTML=`<video controls autoplay src="${url}" style="width:100%;max-width:340px;border-radius:10px;background:#000;display:block;"></video>`;
+    v.src=url;setLoadProgress(1);
+    try{await v.play();}catch(e){}
   }catch(e){host.innerHTML='❌ 播放失败';}
 }
 
@@ -572,7 +615,7 @@ async function openMediaBrowser(type){
       if(mediaBrowserView==='list'){
         const row=document.createElement('div');row.className='nk-row';
         const th=document.createElement('div');th.className='nk-thumb sm';
-        if(info.type==='video')th.classList.add('play');else if(info.type!=='photo'&&info.type!=='gif')th.innerHTML=ICONS.file;
+        if(info.type==='video')th.classList.add('play');else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
         th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;th._entity=currentEntity;
         const meta=document.createElement('div');meta.className='nk-meta';
         meta.innerHTML=`<div class="nk-name">${escapeHtml(info.name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
@@ -581,14 +624,18 @@ async function openMediaBrowser(type){
         if(th._thumbMsg)loadThumb(th,msg);
       }else{
         const card=document.createElement('div');card.className='mb-card';
+        const titleBar=document.createElement('div');titleBar.className='mb-name-bar';titleBar.textContent=chatName(currentEntity);
         const th=document.createElement('div');th.className='mb-thumb';
         if(info.type==='video'||info.type==='gif')th.classList.add('play');
         th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;th._entity=currentEntity;
-        const nm=document.createElement('div');nm.className='nk-name';nm.textContent=info.name;
-        card.append(th,nm);
+        const footer=document.createElement('div');footer.className='mb-footer';
+        const nm=document.createElement('div');nm.className='mb-name';nm.textContent=info.name;
+        const tm=document.createElement('div');tm.className='mb-time';tm.textContent=msg.date?fmtTime(msg.date).split(' ')[1]:'';
+        footer.append(nm,tm);
+        card.append(titleBar,th,footer);
         card.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser',currentEntity);};
         el.mediaBrowserGrid.appendChild(card);
-        if(th._thumbMsg)loadThumb(th,msg);
+        loadThumb(th,msg);
       }
     });
   }catch(e){el.mediaBrowserGrid.innerHTML='<div class="empty-hint">加载失败</div>';}
@@ -738,22 +785,25 @@ function renderNetdisk(cat){
       const row=document.createElement('div');row.className='nk-row';
       const th=document.createElement('div');th.className='nk-thumb sm';
       th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
-      if(info.type==='video')th.classList.add('play');else if(info.type!=='photo'&&info.type!=='gif')th.innerHTML=ICONS.file;
+      if(info.type==='video')th.classList.add('play');else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
       const meta=document.createElement('div');meta.className='nk-meta';
       meta.innerHTML=`<div class="nk-name">${escapeHtml(info.name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
       row.append(th,meta);row.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
       el.netdiskGrid.appendChild(row);
-      if(th._thumbMsg)loadThumb(th,msg);   // 立即加载，确保移动端也能显示
+      loadThumb(th,msg);
     }else{
       const card=document.createElement('div');card.className='nk-card';
       const nameBar=document.createElement('div');nameBar.className='nk-name-bar';nameBar.textContent=chName;
       const th=document.createElement('div');th.className='nk-thumb';
       th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
-      if(info.type==='video')th.classList.add('play');else if(info.type!=='photo'&&info.type!=='gif')th.innerHTML=ICONS.file;
+      if(info.type==='video')th.classList.add('play');else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
+      const footer=document.createElement('div');footer.className='nk-footer';
       const nm=document.createElement('div');nm.className='nk-name';nm.textContent=info.name;
-      card.append(nameBar,th,nm);card.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
+      const tm=document.createElement('div');tm.className='nk-time';tm.textContent=msg.date?fmtTime(msg.date).split(' ')[1]:'';
+      footer.append(nm,tm);
+      card.append(nameBar,th,footer);card.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
       el.netdiskGrid.appendChild(card);
-      if(th._thumbMsg)loadThumb(th,msg);
+      loadThumb(th,msg);
     }
   });
 }
