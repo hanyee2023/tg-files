@@ -86,7 +86,7 @@
   .msg-media{position:relative;margin-top:4px;border-radius:10px;overflow:hidden;background:var(--tg-attach);min-height:60px;display:flex;align-items:center;justify-content:center;min-width:180px;}
   .msg-media img{display:block;width:100%;max-width:340px;border-radius:10px;}
   .msg-media video{width:100%;max-width:340px;border-radius:10px;background:#000;display:block;}
-  .lazy-ph{width:260px;max-width:100%;height:180px;background:var(--tg-attach);border-radius:10px;background-size:cover;background-position:center;background-repeat:no-repeat;}
+  .lazy-ph{width:100%;max-width:340px;aspect-ratio:4/3;height:auto;background:var(--tg-attach);border-radius:10px;background-size:cover;background-position:center;background-repeat:no-repeat;}
   .play-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.28);cursor:pointer;}
   .play-overlay svg{width:54px;height:54px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5));}
   .media-size{position:absolute;left:6px;bottom:6px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;padding:2px 7px;border-radius:10px;z-index:2;}
@@ -200,7 +200,7 @@
   .vp-info{flex:1;display:flex;flex-direction:column;justify-content:center;min-width:0;gap:2px;}
   .vp-name{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.9;}
   .vp-time{font-variant-numeric:tabular-nums;text-shadow:0 1px 2px rgba(0,0,0,.7);font-size:12px;}
-  .vp-right{flex:0 0 auto;display:flex;align-items:center;gap:8px;}
+  .vp-right{margin-left:auto;padding-right:14px;flex:0 0 auto;display:flex;align-items:center;gap:8px;}
   .vp-mute{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.12);border-radius:50%;color:#fff;border:none;cursor:pointer;padding:0;}
   .vp-mute svg{width:16px;height:16px;fill:currentColor;}
 
@@ -266,6 +266,23 @@
     /* 移动端详情作为右侧滑出覆盖层 */
     #details{position:fixed;top:0;right:0;height:100vh;z-index:150;box-shadow:-4px 0 20px rgba(0,0,0,.2);width:84vw;max-width:340px;}
   }
+  /* 视频加载遮罩：大号蓝色圆环 + 百分比（实时下载进度） */
+  .vp-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:3;pointer-events:none;}
+  .vp-ring-lg{position:relative;width:96px;height:96px;display:flex;align-items:center;justify-content:center;}
+  .vp-ring-lg svg{position:absolute;inset:0;width:100%;height:100%;}
+  .vp-ring-lg .cp{stroke:var(--tg-blue);}
+  .vp-pct{font-size:14px;font-weight:700;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.8);font-variant-numeric:tabular-nums;}
+
+  /* 缩略图铺满卡片（按媒体比例裁切，无白边） */
+  .nk-thumb, .mb-thumb{background-size:cover;background-position:center;background-repeat:no-repeat;}
+
+  /* 卡片网格：瀑布流（按媒体尺寸自适应高度）+ 更宽松间距，避免“缩在一堆” */
+  #netdiskGrid:not(.list-mode), #mediaBrowserGrid:not(.list-mode){display:block;column-width:170px;column-gap:14px;padding:16px;align-content:normal;}
+  #netdiskGrid:not(.list-mode) .nk-card, #mediaBrowserGrid:not(.list-mode) .mb-card{width:100%;margin:0 0 14px;break-inside:avoid;display:inline-block;}
+
+  /* 媒体查看器进度遮罩 */
+  #viewerProgress{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(60vw,300px);height:6px;border-radius:3px;background:rgba(255,255,255,.25);overflow:hidden;z-index:5;display:none;}
+  #viewerProgress > i{display:block;height:100%;width:0;background:#fff;transition:width .2s;}
 </style>
 </head>
 <body>
