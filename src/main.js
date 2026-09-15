@@ -87,6 +87,8 @@ const ICONS = {
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>',
   refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.3"/></svg>',
   users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+  volume: '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  mute: '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
 };
 function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function getInitials(name){name=(name||'').trim();if(!name)return'?';const p=name.split(/\s+/);return (p[0]?.[0]||'')+(p[1]?.[0]||'');}
@@ -96,9 +98,17 @@ function fmtSize(b){if(!b)return'';if(b<1024)return b+'B';if(b<1048576)return (b
 function getMediaKey(entity,msg,suffix){if(!entity||!msg)return null;return `${entity.id}:${msg.id}:${suffix}`;}
 function setThumbFallback(node,info){
   if(!node||!info)return;
+  const vbtn=node.querySelector('.vbtn');
+  const overlay=node.querySelector('.play-overlay');
   const map={video:ICONS.video,image:ICONS.image,gif:ICONS.image,audio:ICONS.audio,file:ICONS.file};
   const icon=map[info.type]||ICONS.file;
-  node.innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--tg-sub);padding:10px;text-align:center;">${icon}<span style="font-size:11px;max-width:100%;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(info.name)}</span></div>`;
+  node.innerHTML='';
+  const wrap=document.createElement('div');
+  wrap.style.cssText='display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--tg-sub);padding:10px;text-align:center;';
+  wrap.innerHTML=`${icon}<span style="font-size:11px;max-width:100%;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(info.name)}</span>`;
+  node.appendChild(wrap);
+  if(vbtn)node.appendChild(vbtn);
+  if(overlay)node.appendChild(overlay);
   node.style.background='var(--tg-attach)';
 }
 function fmtTime(ts){if(!ts)return'';const d=new Date(ts*1000);const p=n=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
@@ -200,35 +210,36 @@ async function loadThumb(node,msg){
   const entity=(node._entity||currentEntity);
   const key=(node._cacheKey||(getMediaKey(entity,msg,'thumb')));
   if(mediaCache.has(key)){applyThumb(node,mediaCache.get(key));return;}
+  let url=null;
+  // Telegram 的 downloadMedia 只接受数字索引或尺寸字符串（'s','m','x','y'），不接受 thumb:true
+  const thumbSizes=['m','x','s','y',0];
   try{
-    let url=null;
     if(info.type==='image'){
-      let buf=await client.downloadMedia(msg,{thumb:true});
-      if(!buf||!buf.length)buf=await client.downloadMedia(msg);
-      if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
-    }else if(info.type==='video'){
-      let buf=await client.downloadMedia(msg,{thumb:true});   // 服务端缩略图即首帧
-      if(!buf||!buf.length){
-        // 尝试常见缩略图尺寸
-        for(const sz of ['s','m','x','y']){
-          try{buf=await client.downloadMedia(msg,{thumb:sz});if(buf&&buf.length)break;}catch(e){}
-        }
+      // 优先缩略图 'm'/'x'，失败则下载原图兜底
+      for(const opt of thumbSizes){
+        try{const buf=await client.downloadMedia(msg,{thumb:opt});if(buf&&buf.length){url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));break;}}catch(e){}
       }
-      if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
-      else{
-        // 仍无缩略图时：尝试下载完整视频提取首帧（限时 6 秒，避免大视频长时间等待）
+      if(!url){try{const buf=await client.downloadMedia(msg);if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:info.mime||'image/jpeg'}));}catch(e){}}
+    }else if(info.type==='video'){
+      // 1) 服务端缩略图即首帧（Telegram 为多数视频生成）
+      for(const opt of thumbSizes){
+        try{const buf=await client.downloadMedia(msg,{thumb:opt});if(buf&&buf.length){url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));break;}}catch(e){}
+      }
+      // 2) 仍无缩略图时：仅对小视频尝试下载并提取首帧，避免大视频长时间卡死
+      if(!url && info.size && info.size < 30*1024*1024){
         try{
-          const fb=await Promise.race([client.downloadMedia(msg),new Promise((_,rej)=>setTimeout(()=>rej(new Error('thumb timeout')),6000))]);
+          const fb=await Promise.race([client.downloadMedia(msg),new Promise((_,rej)=>setTimeout(()=>rej(new Error('thumb timeout')),10000))]);
           if(fb&&fb.length)url=await extractFirstFrame(fb,info.mime);
         }catch(e){}
       }
     }else if(info.type==='gif'){
-      let buf=await client.downloadMedia(msg,{thumb:true});
-      if(buf&&buf.length)url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));
+      for(const opt of thumbSizes){
+        try{const buf=await client.downloadMedia(msg,{thumb:opt});if(buf&&buf.length){url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));break;}}catch(e){}
+      }
     }
-    if(url){mediaCache.set(key,url);applyThumb(node,url);}
-    else setThumbFallback(node,info);
-  }catch(e){setThumbFallback(node,info);}
+  }catch(e){}
+  if(url){mediaCache.set(key,url);applyThumb(node,url);}
+  else setThumbFallback(node,info);
 }
 
 // ===== 认证 =====
@@ -424,7 +435,7 @@ el.messages.addEventListener('click',async(e)=>{
 });
 async function findMsg(id){try{const m=await client.getMessages(currentEntity,{ids:[id]});return m[0];}catch(e){return null;}}
 
-// 自定义视频播放器：无默认 controls，左下角播放/暂停+圆形下载进度，底部蓝色进度条，右下角时间+静音
+// 自定义视频播放器：无默认 controls，左下角播放/暂停+蓝色圆形下载进度，文件名+倒计时+静音
 async function playVideo(host,msg,entity){
   if(!entity)entity=currentEntity;
   lastFocusVideo=msg;
@@ -440,46 +451,46 @@ async function playVideo(host,msg,entity){
   const ctrl=document.createElement('div');ctrl.className='vp-controls';
   const left=document.createElement('div');left.className='vp-left';
   const playBtn=document.createElement('button');playBtn.className='vp-play';
-  playBtn.innerHTML=`<span class="vp-icon">▶</span><span class="vp-ring"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="3"/><circle class="vp-ring-cp" cx="18" cy="18" r="15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg></span>`;
+  playBtn.innerHTML=`<span class="vp-icon">▶</span><span class="vp-ring"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="3"/><circle class="vp-ring-cp cp" cx="18" cy="18" r="15" fill="none" stroke-width="3" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg></span>`;
   left.appendChild(playBtn);
 
-  const bar=document.createElement('div');bar.className='vp-bar';
-  const barFill=document.createElement('div');barFill.className='vp-bar-fill';
-  bar.appendChild(barFill);
+  const infoBox=document.createElement('div');infoBox.className='vp-info';
+  const nameSpan=document.createElement('div');nameSpan.className='vp-name';nameSpan.textContent=info?info.name:'';
+  const timeSpan=document.createElement('span');timeSpan.className='vp-time';timeSpan.textContent='0:00';
+  infoBox.append(nameSpan,timeSpan);
 
   const right=document.createElement('div');right.className='vp-right';
-  const time=document.createElement('span');time.className='vp-time';time.textContent='0:00';
-  const muteBtn=document.createElement('button');muteBtn.className='vp-mute';muteBtn.textContent='🔊';
-  right.append(time,muteBtn);
+  const muteBtn=document.createElement('button');muteBtn.className='vp-mute';muteBtn.innerHTML=ICONS.volume;
+  right.appendChild(muteBtn);
 
-  ctrl.append(left,bar,right);wrap.appendChild(ctrl);host.appendChild(wrap);
+  ctrl.append(left,infoBox,right);wrap.appendChild(ctrl);host.appendChild(wrap);
 
   const cp=playBtn.querySelector('.vp-ring-cp');
   const icon=playBtn.querySelector('.vp-icon');
   wrap.addEventListener('click',e=>e.stopPropagation());   // 点击播放器控制条不触发消息查看器
-  function setLoadProgress(p){const pct=Math.max(0,Math.min(1,p));cp.style.strokeDashoffset=String(94.2*(1-pct));barFill.style.width=Math.round(pct*100)+'%';}
+  function setLoadProgress(p){const pct=Math.max(0,Math.min(1,p));cp.style.strokeDashoffset=String(94.2*(1-pct));}
   function fmtDur(s){if(!s||!isFinite(s))return '0:00';const m=Math.floor(s/60);const sec=Math.floor(s%60);return m+':'+String(sec).padStart(2,'0');}
-  function updateTime(){time.textContent='-'+fmtDur(Math.max(0,(v.duration||0)-v.currentTime));}
+  function updateTime(){timeSpan.textContent='-'+fmtDur(Math.max(0,(v.duration||0)-v.currentTime));}
   function syncIcon(){icon.textContent=v.paused?'▶':'⏸';}
+  async function safePlay(){try{await v.play();}catch(e){if(e&&e.name!=='AbortError')console.warn('play error',e);}}
 
-  playBtn.onclick=(e)=>{e.stopPropagation();if(v.paused){v.play();}else{v.pause();}};
-  muteBtn.onclick=(e)=>{e.stopPropagation();v.muted=!v.muted;muteBtn.textContent=v.muted?'🔇':'🔊';};
-  v.onclick=(e)=>{e.stopPropagation();if(v.paused)v.play();else v.pause();};
+  playBtn.onclick=(e)=>{e.stopPropagation();if(v.paused){safePlay();}else{v.pause();}};
+  muteBtn.onclick=(e)=>{e.stopPropagation();v.muted=!v.muted;muteBtn.innerHTML=v.muted?ICONS.mute:ICONS.volume;};
+  v.onclick=(e)=>{e.stopPropagation();if(v.paused)safePlay();else v.pause();};
   v.addEventListener('play',syncIcon);v.addEventListener('pause',syncIcon);
   v.addEventListener('timeupdate',updateTime);v.addEventListener('loadedmetadata',updateTime);
   v.addEventListener('ended',()=>{icon.textContent='↻';});
 
   if(mediaCache.has(key)){
     const url=mediaCache.get(key);v.src=url;setLoadProgress(1);
-    try{await v.play();}catch(e){}
-    return;
+    safePlay();return;
   }
   try{
     const buf=await client.downloadMedia(msg,{progressCallback:p=>setLoadProgress(p)});
     if(!buf||!buf.length){host.innerHTML='❌ 播放失败';return;}
     const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
     v.src=url;setLoadProgress(1);
-    try{await v.play();}catch(e){}
+    safePlay();
   }catch(e){host.innerHTML='❌ 播放失败';}
 }
 
@@ -564,15 +575,16 @@ function renderViewer(){
   const msg=viewerList[viewerIndex];if(!msg){closeViewer();return;}
   const info=mediaInfo(msg);const key=getMediaKey(viewerEntity,msg,'full');
   el.viewerVideo.style.display='none';el.viewerMedia.style.display='none';el.viewerCap.textContent='';
+  async function safePlay(v){try{await v.play();}catch(e){if(e&&e.name!=='AbortError')console.warn('viewer play error',e);}}
   if(info&&(info.type==='video'||info.type==='gif')){
     el.viewerMedia.style.display='none';el.viewerVideo.style.display='block';
-    if(mediaCache.has(key)){el.viewerVideo.src=mediaCache.get(key);el.viewerVideo.play();return;}
+    if(mediaCache.has(key)){el.viewerVideo.src=mediaCache.get(key);safePlay(el.viewerVideo);return;}
     el.viewerVideo.innerHTML='<div class="progress" style="width:300px"><i></i></div>';
     client.downloadMedia(msg,{progressCallback:p=>{const b=el.viewerVideo.querySelector('.progress > i');if(b)b.style.width=Math.round(p*100)+'%';}}).then(buf=>{
       if(!buf||!buf.length){el.viewerVideo.innerHTML='❌';return;}
       const mime=(msg.video&&msg.video.mimeType)||(msg.document&&msg.document.mimeType)||'video/mp4';
       const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
-      el.viewerVideo.src=url;el.viewerVideo.play();
+      el.viewerVideo.src=url;safePlay(el.viewerVideo);
     }).catch(()=>{el.viewerVideo.innerHTML='❌';});
   }else if(info&&info.type==='image'){
     el.viewerMedia.style.display='block';
@@ -603,11 +615,24 @@ async function openMediaBrowser(type){
   el.mediaBrowserGrid.innerHTML='<div class="loading-spinner"></div>';
   el.mediaBrowser.classList.add('open');
   try{
-    const msgs=await client.getMessages(currentEntity,{limit:100});
-    const list=msgs.filter(m=>{const i=mediaInfo(m);if(!i)return false;
-      if(type==='video')return i.type==='video';
-      if(type==='image')return i.type==='image'||i.type==='gif';
-      return false;});
+    // 分页抓取，避免最近 100 条里没图片/视频就显示为空
+    const list=[];
+    let offsetId=null,total=0;
+    const MAX_TOTAL=500,TARGET=30;
+    while(total<MAX_TOTAL && list.length<TARGET){
+      const opts={limit:100};if(offsetId)opts.offsetId=offsetId;
+      const msgs=await client.getMessages(currentEntity,opts);
+      if(!msgs||!msgs.length)break;
+      total+=msgs.length;
+      for(const m of msgs){
+        const i=mediaInfo(m);if(!i)continue;
+        if(type==='video'&&i.type!=='video')continue;
+        if(type==='image'&&i.type!=='image'&&i.type!=='gif')continue;
+        list.push(m);
+      }
+      offsetId=msgs[msgs.length-1].id;
+      if(msgs.length<100)break;  // 已到底
+    }
     el.mediaBrowserGrid.innerHTML='';
     if(!list.length){el.mediaBrowserGrid.innerHTML='<div class="empty-hint">暂无</div>';return;}
     list.forEach((msg,i)=>{
