@@ -249,20 +249,38 @@
   <script>
   // 全局错误捕获：任何加载/运行错误都会显示到底部红条，避免"一片空白"无从排查
   (function(){
-    function showFatal(msg){
+    function showFatal(title, detail){
       try{
         var d=document.getElementById('__fatal');
-        if(!d){d=document.createElement('div');d.id='__fatal';d.style.cssText='position:fixed;left:0;right:0;bottom:0;background:#e8513e;color:#fff;font-size:12px;line-height:1.5;padding:10px 12px;z-index:99999;white-space:pre-wrap;box-shadow:0 -2px 8px rgba(0,0,0,.2)';document.body.appendChild(d);}
-        d.textContent='⚠ 运行错误（请截图发给开发者）：\n'+msg;
+        if(!d){
+          d=document.createElement('div');d.id='__fatal';
+          d.style.cssText='position:fixed;left:0;right:0;bottom:0;background:#e8513e;color:#fff;font-size:12px;line-height:1.45;padding:10px 12px;z-index:99999;white-space:pre-wrap;box-shadow:0 -2px 8px rgba(0,0,0,.2);max-height:40vh;overflow:auto;font-family:monospace;';
+          d.onclick=function(){this.style.maxHeight=this.style.maxHeight==='none'?'40vh':'none';};
+          document.body.appendChild(d);
+        }
+        d.innerHTML='<b>⚠ '+escapeHtml(title)+'（点击展开/折叠，请截图给开发者）</b>\n'+(detail||'').split('\n').map(function(l){return escapeHtml(l);}).join('\n');
       }catch(e){console.error('fatal',e);}
     }
+    function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]);});}
+    function describeError(err){
+      if(err==null)return'null';
+      if(typeof err==='string')return err;
+      var parts=[];
+      parts.push('类型: '+(err.name||err.constructor?.name||typeof err));
+      if(err.message)parts.push('消息: '+err.message);
+      if(err.filename)parts.push('文件: '+err.filename+':'+(err.lineno||'?')+':'+(err.colno||'?'));
+      if(err.stack)parts.push('堆栈:\n'+err.stack);
+      return parts.join('\n');
+    }
     window.addEventListener('error',function(e){
-      var m=(e&&e.message)||(e&&e.error&&e.error.message)||'未知错误';
-      if(e&&e.filename)m+='\n@ '+e.filename+':'+(e.lineno||'?');
-      showFatal(m);
+      var err=e&&e.error?e.error:e;
+      var msg=describeError(err);
+      if(e&&e.filename&&!msg.includes('文件:'))msg='文件: '+e.filename+':'+(e.lineno||'?')+':'+(e.colno||'?')+'\n'+msg;
+      showFatal('运行错误', msg || '未知错误');
     },true);
     window.addEventListener('unhandledrejection',function(e){
-      var r=e&&e.reason;showFatal('Promise: '+(r&&r.message?r.message:r));
+      var r=e&&e.reason;
+      showFatal('未处理 Promise 错误', describeError(r));
     });
   })();
   </script>
