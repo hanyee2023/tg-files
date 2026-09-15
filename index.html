@@ -187,6 +187,31 @@
   .vbtn .vplay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;}
   .vbtn .vsize{color:#fff;font-size:11px;text-shadow:0 1px 2px rgba(0,0,0,.7);}
 
+  /* 自定义视频播放器（无默认 controls） */
+  .vp-wrap{position:relative;width:100%;max-width:340px;border-radius:10px;overflow:hidden;background:#000;display:block;}
+  .vp-video{width:100%;display:block;background:#000;}
+  .vp-controls{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:8px;padding:8px 10px;background:linear-gradient(to top,rgba(0,0,0,.72),rgba(0,0,0,.25));color:#fff;font-size:12px;z-index:4;opacity:1;transition:opacity .2s;}
+  .vp-wrap:hover .vp-controls{opacity:1;}
+  .vp-left{flex:0 0 auto;display:flex;align-items:center;position:relative;width:32px;height:32px;}
+  .vp-play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4);border-radius:50%;color:#fff;border:none;cursor:pointer;}
+  .vp-play .vp-icon{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;}
+  .vp-ring{position:absolute;inset:0;pointer-events:none;}
+  .vp-ring svg{width:100%;height:100%;}
+  .vp-bar{flex:1;height:5px;border-radius:3px;background:rgba(255,255,255,.3);overflow:hidden;}
+  .vp-bar-fill{height:100%;width:0;background:var(--tg-blue);transition:width .12s;}
+  .vp-right{flex:0 0 auto;display:flex;align-items:center;gap:8px;}
+  .vp-time{font-variant-numeric:tabular-nums;text-shadow:0 1px 2px rgba(0,0,0,.7);}
+  .vp-mute{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.4);border-radius:50%;color:#fff;border:none;cursor:pointer;font-size:13px;}
+
+  /* 网盘 / 媒体浏览器卡片：三段式（顶部名称 + 中部媒体铺满 + 底部文件名+时间） */
+  .mb-card, .nk-card{background:var(--tg-panel);border-radius:12px;overflow:hidden;cursor:pointer;display:flex;flex-direction:column;box-shadow:var(--tg-shadow);}
+  .mb-name-bar, .nk-name-bar{font-size:12px;font-weight:600;padding:7px 9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tg-text);border-bottom:1px solid var(--tg-border);}
+  .mb-thumb, .nk-thumb{width:100%;aspect-ratio:16/10;background:var(--tg-attach);display:flex;align-items:center;justify-content:center;background-size:cover;background-position:center;background-repeat:no-repeat;position:relative;min-height:120px;}
+  .mb-thumb.play::after, .nk-thumb.play::after{content:"";position:absolute;width:0;height:0;border-left:22px solid #fff;border-top:14px solid transparent;border-bottom:14px solid transparent;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6));}
+  .mb-footer, .nk-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-top:1px solid var(--tg-border);}
+  .mb-footer .mb-name, .nk-footer .nk-name{flex:1;min-width:0;font-size:11px;color:var(--tg-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .mb-footer .mb-time, .nk-footer .nk-time{font-size:10px;color:var(--tg-sub);flex:0 0 auto;}
+
   /* 列表模式（网盘 / 媒体浏览器） */
   #netdiskGrid.list-mode,#mediaBrowserGrid.list-mode{display:flex;flex-direction:column;gap:8px;align-content:start;}
   .nk-row{display:flex;align-items:center;gap:12px;background:var(--tg-panel);border-radius:10px;padding:8px 12px;cursor:pointer;box-shadow:var(--tg-shadow);}
@@ -210,10 +235,7 @@
   /* 媒体浏览器（全部视频/图片） */
   #mediaBrowser{position:fixed;inset:0;background:var(--tg-bg);z-index:230;display:none;flex-direction:column;}
   #mediaBrowser.open{display:flex;}
-  #mediaBrowserGrid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;padding:14px;align-content:start;}
-  .mb-card{background:var(--tg-panel);border-radius:10px;overflow:hidden;cursor:pointer;}
-  .mb-thumb{width:100%;aspect-ratio:1/1;background:var(--tg-attach);background-size:cover;background-position:center;background-repeat:no-repeat;display:flex;align-items:center;justify-content:center;position:relative;}
-  .mb-thumb.play::after{content:"";position:absolute;width:0;height:0;border-left:18px solid #fff;border-top:11px solid transparent;border-bottom:11px solid transparent;}
+  #mediaBrowserGrid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px;padding:14px;align-content:start;}
 
   .menu{position:fixed;z-index:90;background:var(--tg-panel);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.25);padding:6px;min-width:180px;display:none;}
   .menu.open{display:block;}
@@ -279,6 +301,10 @@
       return parts.join('\n');
     }
     window.addEventListener('error',function(e){
+      var t=e&&e.target;
+      var src=(t&&t.src)||(t&&t.href)||(e&&e.filename)||'';
+      // Cloudflare Pages 自动注入的 analytics 脚本加载失败，不是应用代码问题，忽略
+      if(src.includes('cloudflareinsights.com')){console.warn('[ignore] cloudflareinsights error');return;}
       var err=e&&e.error?e.error:e;
       var msg=describeError(err);
       if(e&&e.filename&&!msg.includes('文件:'))msg='文件: '+e.filename+':'+(e.lineno||'?')+':'+(e.colno||'?')+'\n'+msg;
