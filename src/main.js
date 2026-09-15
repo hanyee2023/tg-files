@@ -613,16 +613,16 @@ async function loadDetails(entity){
 let mediaStatsState={video:{c:0,s:0},image:{c:0,s:0},gif:{c:0,s:0},audio:{c:0,s:0},file:{c:0,s:0},link:0,total:0,lastId:null,loading:false,entity:null,members:0};
 async function loadMediaStats(entity,loadMore=false,members=0){
   if(!loadMore){
-    mediaStatsState={video:{c:0,s:0},image:{c:0,s:0},gif:{c:0,s:0},audio:{c:0,s:0},file:{c:0,s:0},link:0,total:0,lastId:null,loading:false,entity,members};
+    mediaStatsState={video:{c:0,s:0},image:{c:0,s:0},gif:{c:0,s:0},audio:{c:0,s:0},file:{c:0,s:0},link:0,total:0,lastId:null,loading:false,entity,members,done:false};
     el.dStat.innerHTML='<div class="stat-row"><div class="stat-label">'+ICONS.refresh+'<span>正在统计…</span></div><div class="stat-val">—</div></div>';
     el.dStatMore.innerHTML='';el.dStatMore.style.display='none';
   }
-  if(mediaStatsState.loading||mediaStatsState.total>=2000)return;
+  if(mediaStatsState.loading||mediaStatsState.total>=2000||mediaStatsState.done)return;
   mediaStatsState.loading=true;
   try{
     const opts={limit:100};if(mediaStatsState.lastId)opts.offsetId=mediaStatsState.lastId;
     const msgs=await client.getMessages(entity,opts);
-    if(!msgs||!msgs.length){renderMediaStats(true);mediaStatsState.loading=false;return;}
+    if(!msgs||!msgs.length){mediaStatsState.done=true;renderMediaStats(true);mediaStatsState.loading=false;return;}
     for(const m of msgs){
       const i=mediaInfo(m);
       if(i){mediaStatsState.total++;const st=mediaStatsState[i.type];if(st){st.c++;st.s+=i.size||0;}}
@@ -630,9 +630,13 @@ async function loadMediaStats(entity,loadMore=false,members=0){
     }
     mediaStatsState.lastId=msgs[msgs.length-1].id;
     renderMediaStats(false);
-    // 自动继续统计，直到 2000 条或用户点击停止
-    if(mediaStatsState.total<2000){setTimeout(()=>loadMediaStats(entity,false),30);}
-  }catch(e){}
+    // 自动继续统计，直到 2000 条、已到底或用户停止
+    if(mediaStatsState.total<2000&&msgs.length>=100){setTimeout(()=>loadMediaStats(entity,true),30);}
+    else{mediaStatsState.done=true;renderMediaStats(true);}
+  }catch(e){
+    el.dStatMore.innerHTML=`<span class="stat-sub" style="color:var(--tg-danger);">统计出错：${escapeHtml(e.message||e)}</span>`;
+    el.dStatMore.style.display='block';
+  }
   mediaStatsState.loading=false;
 }
 function renderMediaStats(done){
