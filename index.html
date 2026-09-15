@@ -265,6 +265,12 @@
     function describeError(err){
       if(err==null)return'null';
       if(typeof err==='string')return err;
+      if(err instanceof Event){
+        var t=err.target||err.srcElement;
+        var info='事件: '+(err.type||'error');
+        if(t){info+='\n元素: '+(t.tagName||'?');if(t.src)info+='\nsrc: '+t.src;if(t.href)info+='\nhref: '+t.href;if(t.currentSrc)info+='\ncurrentSrc: '+t.currentSrc;}
+        return info;
+      }
       var parts=[];
       parts.push('类型: '+(err.name||err.constructor?.name||typeof err));
       if(err.message)parts.push('消息: '+err.message);
