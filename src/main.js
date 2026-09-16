@@ -13,7 +13,11 @@ const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
 class ProxiedWebSockets extends PromisedWebSockets {
   getWebSocketLink(ip, port, testServers) {
     const path = `/apiws${testServers ? '_test' : ''}`;
-    if (PROXY_DOMAIN) return `wss://${PROXY_DOMAIN}/${ip}${path}`;
+    if (PROXY_DOMAIN) {
+      // https 页面用 wss，http（本地调试）用 ws
+      const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
+      return `${scheme}://${PROXY_DOMAIN}/${ip}${path}`;
+    }
     return super.getWebSocketLink(ip, port, testServers);
   }
 }
@@ -67,10 +71,27 @@ let selfMe = null;
 const senderCache = new Map();
 const mediaCache = new Map();   // 媒体缓存：key -> blob URL（缩略图 / 完整视频）
 let lazyObserver = null;
-let netdiskView = 'card', currentNetdiskCat = 'all';
+let netdiskView = 'list', currentNetdiskCat = 'all';
 let mediaBrowserView = 'card', currentMediaBrowserType = 'video';
 let oldestId = null, loadingOlder = false;
 let lastFocusVideo = null;      // 当前正在播放/加载的视频消息，用于集中带宽
+
+// ===== 视频下载串行化（同一时间只下载一条视频，集中带宽给正在播放的那条）=====
+let _dlRunning = false;
+const _dlQueue = [];
+function enqueueDownload(task){
+  return new Promise((resolve,reject)=>{
+    _dlQueue.push({task,resolve,reject});
+    _pumpDownloads();
+  });
+}
+function _pumpDownloads(){
+  if(_dlRunning)return;
+  if(!_dlQueue.length)return;
+  _dlRunning=true;
+  const {task,resolve,reject}=_dlQueue.shift();
+  Promise.resolve().then(task).then(resolve,e=>reject(e)).finally(()=>{_dlRunning=false;_pumpDownloads();});
+}
 
 // ===== 工具 =====
 const ICONS = {
@@ -190,12 +211,7 @@ function applyThumb(node,url){
   const ph=node.querySelector('.lazy-ph');
   if(ph){ph.style.backgroundImage=`url(${url})`;}
   else {node.style.backgroundImage=`url(${url})`;node.style.backgroundSize='cover';node.style.backgroundPosition='center';}
-  // 按媒体真实比例调整卡片缩略图区域（瀑布流自适应高度）；聊天内联图保持原比例
-  if(!ph){
-    const img=new Image();
-    img.onload=()=>{ if(img.naturalWidth&&img.naturalHeight){ try{ node.style.aspectRatio=(img.naturalWidth/img.naturalHeight).toFixed(3); }catch(e){} } };
-    img.src=url;
-  }
+  // 注意：不要在这里用自然宽高比覆盖 aspect-ratio，否则会破坏网盘正方形封面 / 列表布局的既定比例
 }
 // 从完整视频中提取首帧（用于没有服务端缩略图的视频，如本应用早期发送的文件型视频）
 function extractFirstFrame(buf,mime){
@@ -267,21 +283,41 @@ async function init(){
     const phone=prompt('请输入手机号（含国家码，如 +8613800000000）：');
     if(!phone){el.messages.innerHTML='<div class="empty-hint">未登录</div>';return;}
     try{
+      setConn('connecting');
       await client.connect();
       const sent=await client.sendCode({apiId:API_ID,apiHash:API_HASH,phoneNumber:phone});
       const code=prompt('请输入 Telegram 发来的验证码：');
       const sign=await client.signIn({phoneNumber:phone,phoneCodeHash:sent.phoneCodeHash,phoneCode:code});
       finishLogin(sign);
-    }catch(e){alert('登录失败：'+e.message);}
+    }catch(e){setConn('error',e.message);alert('登录失败：'+e.message);}
     return;
   }
-  try{await client.connect();const me=await client.getMe();finishLogin(me);}
-  catch(e){toast('连接失败：'+e.message);el.messages.innerHTML='<div class="empty-hint">连接失败</div>';}
+  try{
+    setConn('connecting');
+    await client.connect();
+    const me=await client.getMe();
+    finishLogin(me);
+  }
+  catch(e){setConn('error',e.message);toast('连接失败：'+e.message);el.messages.innerHTML='<div class="empty-hint">连接失败：'+(e&&e.message?e.message:'未知')+'</div>';}
+}
+// 连接状态指示（右上角固定小圆点，避免"空白但不知道卡在哪"）
+function setConn(state,msg){
+  let chip=document.getElementById('conn-chip');
+  if(!chip){chip=document.createElement('div');chip.id='conn-chip';document.body.appendChild(chip);}
+  const map={
+    connecting:['conn-dot on','连接 Telegram 中…'],
+    ok:['conn-dot ok','已连接'],
+    error:['conn-dot err','连接失败：'+(msg||'')+'（将自动重试）'],
+  };
+  const [cls,text]=map[state]||map.connecting;
+  chip.innerHTML=`<span class="${cls}"></span>${text}`;
+  if(state==='ok'){setTimeout(()=>{chip.style.opacity='0';},2000);}
+  else chip.style.opacity='1';
 }
 function finishLogin(me,silent){
   localStorage.setItem('tg_session',client.session.save());
   try{localStorage.setItem('tg_self',JSON.stringify({id:me.id,firstName:me.firstName,lastName:me.lastName,username:me.username,phone:me.phone}));}catch(e){}
-  selfMe=me;showAccount(me);loadDialogs();
+  selfMe=me;setConn('ok');showAccount(me);loadDialogs();
 }
 function showAccount(me){
   if(!me)return;
@@ -441,7 +477,7 @@ el.messages.addEventListener('click',async(e)=>{
 });
 async function findMsg(id){try{const m=await client.getMessages(currentEntity,{ids:[id]});return m[0];}catch(e){return null;}}
 
-// 自定义视频播放器：无默认 controls，左下角播放/暂停+蓝色圆形下载进度，文件名+倒计时+静音
+// 自定义视频播放器：无默认 controls，仅左下角圆形进度 + 播放/暂停 + 文件名 + 倒计时 + 静音
 async function playVideo(host,msg,entity){
   if(!entity)entity=currentEntity;
   lastFocusVideo=msg;
@@ -453,13 +489,6 @@ async function playVideo(host,msg,entity){
   const wrap=document.createElement('div');wrap.className='vp-wrap';
   const v=document.createElement('video');v.className='vp-video';v.playsInline=true;v.preload='auto';v.muted=true; // 静音自动播放，规避浏览器自动播放限制（一次点击即播）
   wrap.appendChild(v);
-
-  // 加载遮罩：大号蓝色圆环 + 百分比，实时反映下载进度
-  const loading=document.createElement('div');loading.className='vp-loading';
-  loading.innerHTML=`<div class="vp-ring-lg"><svg viewBox="0 0 80 80"><circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,.25)" stroke-width="6"/><circle class="cp" cx="40" cy="40" r="34" fill="none" stroke-width="6" stroke-linecap="round" stroke-dasharray="213.6" stroke-dashoffset="213.6" transform="rotate(-90 40 40)"/></svg><span class="vp-pct">0%</span></div>`;
-  wrap.appendChild(loading);
-  const lgCp=loading.querySelector('.cp');
-  const pct=loading.querySelector('.vp-pct');
 
   const ctrl=document.createElement('div');ctrl.className='vp-controls';
   const left=document.createElement('div');left.className='vp-left';
@@ -481,7 +510,8 @@ async function playVideo(host,msg,entity){
   const cp=playBtn.querySelector('.vp-ring-cp');
   const icon=playBtn.querySelector('.vp-icon');
   wrap.addEventListener('click',e=>e.stopPropagation());
-  function setLoadProgress(p){const t=Math.max(0,Math.min(1,p));cp.style.strokeDashoffset=String(94.2*(1-t));lgCp.style.strokeDashoffset=String(213.6*(1-t));pct.textContent=Math.round(t*100)+'%';}
+  // 左下角圆形进度 = 实时下载进度（不再有中间大进度条）
+  function setLoadProgress(p){const t=Math.max(0,Math.min(1,p));cp.style.strokeDashoffset=String(94.2*(1-t));}
   function fmtDur(s){if(!s||!isFinite(s))return '0:00';const m=Math.floor(s/60);const sec=Math.floor(s%60);return m+':'+String(sec).padStart(2,'0');}
   function updateTime(){timeSpan.textContent='-'+fmtDur(Math.max(0,(v.duration||0)-v.currentTime));}
   function syncIcon(){icon.textContent=v.paused?'▶':'⏸';}
@@ -494,15 +524,16 @@ async function playVideo(host,msg,entity){
   v.addEventListener('timeupdate',updateTime);v.addEventListener('loadedmetadata',updateTime);
   v.addEventListener('ended',()=>{icon.textContent='↻';});
 
-  if(mediaCache.has(key)){
-    const url=mediaCache.get(key);v.src=url;setLoadProgress(1);loading.remove();
-    safePlay();return;
+  if(mediaCache.has(key)){ // 已缓存：直接即播，进度置满
+    const url=mediaCache.get(key);v.src=url;setLoadProgress(1);safePlay();return;
   }
   try{
-    const buf=await client.downloadMedia(msg,{progressCallback:p=>setLoadProgress(p)});
+    // 串行化下载：正在播放本条时，其它视频下载排队等待，集中流量给本条
+    const buf=await enqueueDownload(()=>client.downloadMedia(msg,{progressCallback:p=>{if(lastFocusVideo===msg)setLoadProgress(p);}}));
+    if(lastFocusVideo!==msg)return; // 已切走，丢弃
     if(!buf||!buf.length){host.innerHTML='❌ 播放失败';return;}
     const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
-    v.src=url;setLoadProgress(1);loading.remove();
+    v.src=url;setLoadProgress(1);
     safePlay();   // 已静音，不受自动播放限制，一次点击即播
   }catch(e){host.innerHTML='❌ 播放失败';}
 }
@@ -535,9 +566,11 @@ async function sendFiles(files){
     const circ=makeCircle();const name=document.createElement('div');name.className='up-name';name.textContent=f.name;
     card.append(circ.el,name);getUploads().appendChild(card);
     try{
-      // 直接传浏览器 File 对象（gramJS 原生支持，最稳）；带进度
-      const opts={file:f,progressCallback:p=>circ.set(p)};
-      if(isVideo){opts.mimeType=f.type||'video/mp4';opts.supportsStreaming=true;opts.attributes=[new Api.DocumentAttributeVideo({duration:0,w:0,h:0,supportsStreaming:true})];}
+      // 把浏览器 File 读成 ArrayBuffer 再包成 CustomFile（gramJS 最稳路径），带进度
+      const buf=await f.arrayBuffer();
+      const cf=new CustomFile(f.name,buf.byteLength,'',buf);
+      const opts={file:cf,progressCallback:p=>circ.set(p)};
+      if(isVideo){opts.mimeType=f.type||'video/mp4';opts.supportsStreaming=true;}
       else if(isImage){opts.mimeType=f.type;}
       else {opts.forceDocument=true;}
       const m=await client.sendFile(currentEntity,opts);
@@ -547,7 +580,9 @@ async function sendFiles(files){
     }catch(err){
       // 回退：去掉流式/视频属性再发一次
       try{
-        const m=await client.sendFile(currentEntity,{file:f,forceDocument:!isImage&&!isVideo});
+        const buf2=await f.arrayBuffer();
+        const cf2=new CustomFile(f.name,buf2.byteLength,'',buf2);
+        const m=await client.sendFile(currentEntity,{file:cf2,forceDocument:!isImage&&!isVideo});
         card.remove();if(m)appendMessage(m,false);el.messages.scrollTop=el.messages.scrollHeight;
       }catch(err2){card.remove();toast('发送失败：'+(err2&&err2.message?err2.message:err2));}
     }
@@ -581,7 +616,22 @@ async function shareMedia(msg){
 }
 
 // ===== 媒体查看器 =====
-function openViewer(list,idx,mode,entity){viewerList=list;viewerIndex=idx;viewerMode=mode;viewerEntity=entity||currentEntity;renderViewer();el.viewer.classList.add('open');}
+function openViewer(list,idx,mode,entity){viewerList=list;viewerIndex=idx;viewerMode=mode;viewerEntity=entity||currentEntity;renderViewer();el.viewer.classList.add('open');prefetchAround();}
+// 预取相邻媒体（上一条/下一条），左右切换时秒开、不卡
+function prefetchAround(){
+  const mimeFor=d=>(d.video&&d.video.mimeType)||(d.document&&d.document.mimeType)||'video/mp4';
+  for(const d of [viewerList[viewerIndex-1],viewerList[viewerIndex+1]]){
+    if(!d)continue;
+    const k=getMediaKey(viewerEntity,d,'full');
+    if(mediaCache.has(k))continue;
+    const i=mediaInfo(d);
+    if(i&&(i.type==='video'||i.type==='gif'||i.type==='image')){
+      enqueueDownload(()=>client.downloadMedia(d)).then(buf=>{
+        if(buf&&buf.length)mediaCache.set(k,URL.createObjectURL(new Blob([buf],{type:i.type==='image'?'image/jpeg':mimeFor(d)})));
+      }).catch(()=>{});
+    }
+  }
+}
 let viewerToken=0;
 function renderViewer(){
   const msg=viewerList[viewerIndex];if(!msg){closeViewer();return;}
@@ -603,7 +653,7 @@ function renderViewer(){
     // 先快速拉缩略图作占位，切换时立即可见，不再“等十几秒黑屏”
     client.downloadMedia(msg,{thumb:'m'}).then(buf=>{if(buf&&buf.length&&myToken===viewerToken){el.viewerVideo.poster=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));}}).catch(()=>{});
     setP(0);
-    client.downloadMedia(msg,{progressCallback:p=>{if(myToken===viewerToken)setP(p);}}).then(buf=>{
+    enqueueDownload(()=>client.downloadMedia(msg,{progressCallback:p=>{if(myToken===viewerToken)setP(p);}})).then(buf=>{
       if(myToken!==viewerToken)return;
       if(!buf||!buf.length){prog.style.display='none';el.viewerCap.textContent='❌ 加载失败';return;}
       const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
@@ -869,13 +919,15 @@ el.netdiskFileInput.addEventListener('change',async(e)=>{
   for(const f of e.target.files){
     try{
       const isImage=/^image\//.test(f.type||'');const isVideo=/^video\//.test(f.type||'');
-      const opts={file:f};
-      if(isVideo){opts.mimeType=f.type||'video/mp4';opts.supportsStreaming=true;opts.attributes=[new Api.DocumentAttributeVideo({duration:0,w:0,h:0,supportsStreaming:true})];}
+      const buf=await f.arrayBuffer();
+      const cf=new CustomFile(f.name,buf.byteLength,'',buf);
+      const opts={file:cf};
+      if(isVideo){opts.mimeType=f.type||'video/mp4';opts.supportsStreaming=true;}
       else if(isImage){opts.mimeType=f.type;}
       else {opts.forceDocument=true;}
       await client.sendFile(netdiskChannel,opts);
     }catch(err){
-      try{await client.sendFile(netdiskChannel,{file:f,forceDocument:!isImage&&!isVideo});}
+      try{const buf2=await f.arrayBuffer();const cf2=new CustomFile(f.name,buf2.byteLength,'',buf2);await client.sendFile(netdiskChannel,{file:cf2,forceDocument:!isImage&&!isVideo});}
       catch(err2){toast('上传失败：'+(err2&&err2.message?err2.message:err2));}
     }
   }
