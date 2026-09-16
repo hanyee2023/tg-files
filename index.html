@@ -187,22 +187,30 @@
   .vbtn .vplay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;}
   .vbtn .vsize{color:#fff;font-size:11px;text-shadow:0 1px 2px rgba(0,0,0,.7);}
 
-  /* 自定义视频播放器（无默认 controls）：左下角圆形进度 + 播放/暂停 + 时间 + 静音 */
+  /* 自定义视频播放器（无默认 controls）：控件全透明、无黑影，仅左下角圆形进度 + 时间 + 静音 */
   .vp-wrap{position:relative;width:100%;max-width:340px;border-radius:10px;overflow:hidden;background:#000;display:block;}
   .vp-video{width:100%;display:block;background:#000;}
-  .vp-controls{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:10px;padding:8px 10px;background:linear-gradient(to top,rgba(0,0,0,.75),rgba(0,0,0,.2));color:#fff;font-size:12px;z-index:4;}
+  .vp-controls{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:10px;padding:8px 10px;background:transparent;color:#fff;font-size:12px;z-index:4;}
   .vp-left{flex:0 0 auto;position:relative;width:36px;height:36px;}
   .vp-play{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.45);border-radius:50%;color:#fff;border:none;cursor:pointer;padding:0;}
   .vp-play .vp-icon{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:10px;}
   .vp-ring{position:absolute;inset:-2px;pointer-events:none;}
   .vp-ring svg{width:100%;height:100%;}
   .vp-ring .cp{stroke:var(--tg-blue);}   /* 蓝色加载/缓冲进度 */
-  .vp-info{flex:1;display:flex;flex-direction:column;justify-content:center;min-width:0;gap:2px;}
-  .vp-name{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.9;}
   .vp-time{font-variant-numeric:tabular-nums;text-shadow:0 1px 2px rgba(0,0,0,.7);font-size:12px;}
   .vp-right{margin-left:auto;padding-right:14px;flex:0 0 auto;display:flex;align-items:center;gap:8px;}
   .vp-mute{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.12);border-radius:50%;color:#fff;border:none;cursor:pointer;padding:0;}
   .vp-mute svg{width:16px;height:16px;fill:currentColor;}
+
+  /* 消息卡片（参考官方样式）：底部浏览量+时间；右下角圆形回复按钮 */
+  .msg-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:2px;font-size:11px;color:var(--tg-sub);}
+  .row.out .msg-foot{color:rgba(255,255,255,.75);}
+  .vf-views{display:inline-flex;align-items:center;gap:3px;opacity:.9;}
+  .vf-views svg{opacity:.85;}
+  .vf-time{font-variant-numeric:tabular-nums;}
+  .reply-fab{flex:0 0 auto;align-self:flex-end;width:30px;height:30px;margin:4px 0 0 6px;border-radius:50%;border:none;background:var(--tg-blue);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.18);}
+  .reply-fab svg{width:15px;height:15px;}
+  .reply-fab:active{transform:scale(.92);}
 
   /* 网盘 / 媒体浏览器卡片：三段式（顶部名称 + 中部媒体铺满 + 底部文件名+时间） */
   .mb-card, .nk-card{background:var(--tg-panel);border-radius:12px;overflow:hidden;cursor:pointer;display:flex;flex-direction:column;box-shadow:var(--tg-shadow);}
@@ -514,10 +522,9 @@
       <button data-cat="all" class="sel">全部</button>
       <button data-cat="video">视频</button>
       <button data-cat="image">图片</button>
-      <button data-cat="gif">GIF</button>
       <button data-cat="audio">音频</button>
-      <button data-cat="software">软件</button>
       <button data-cat="document">文档</button>
+      <button data-cat="file">文件</button>
     </div>
     <div id="netdiskGrid"></div>
     <button id="btnNetdiskUpload" class="fab" title="上传">+</button>
