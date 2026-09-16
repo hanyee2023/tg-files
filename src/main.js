@@ -834,11 +834,8 @@ function renderViewer(){
     if(e&&e.name==='NotAllowedError'){v.muted=true;try{await v.play();}catch(_){}}
     else if(e&&e.name!=='AbortError')console.warn('viewer play error',e);
   }}
-  // 进度遮罩（复用）
-  let prog=document.getElementById('viewerProgress');
-  if(!prog){prog=document.createElement('div');prog.id='viewerProgress';prog.innerHTML='<i></i>';el.viewer.appendChild(prog);}
-  const setP=(p)=>{prog.style.display='block';prog.firstChild.style.width=Math.max(0,Math.min(100,p*100))+'%';};
-  prog.style.display='none';
+  // 进度遮罩已移除（按需求：弹窗不显示加载进度条）；保留 setP 占位避免其余回调改动
+  const setP=()=>{};
 
   if(info&&(info.type==='video'||info.type==='gif')){
     el.viewerVideo.style.display='block';
@@ -867,7 +864,7 @@ function renderViewer(){
     el.viewerMedia.style.display='block';el.viewerMedia.alt='[文件] '+(info?info.name:'');el.viewerCap.textContent=(info?info.name:'')+'  ·  '+fmtSize(info?info.size:0);
   }
 }
-function closeViewer(){el.viewer.classList.remove('open');try{el.viewerVideo.pause();el.viewerVideo.removeAttribute('src');}catch(e){}const p=document.getElementById('viewerProgress');if(p)p.style.display='none';}
+function closeViewer(){el.viewer.classList.remove('open');try{el.viewerVideo.pause();el.viewerVideo.removeAttribute('src');}catch(e){}}
 el.viewerClose.onclick=closeViewer;
 el.viewerPrev.onclick=()=>{if(viewerIndex>0){viewerIndex--;renderViewer();}};
 el.viewerNext.onclick=()=>{if(viewerIndex<viewerList.length-1){viewerIndex++;renderViewer();}};
@@ -1081,7 +1078,7 @@ async function loadNetdisk(cat){
       if(msgs.length<100)break;
       offsetId=msgs[msgs.length-1].id;
     }
-    netdiskMediaList=all.filter(m=>mediaInfo(m));
+    netdiskMediaList=all.filter(m=>mediaInfo(m)).sort((a,b)=>(b.date||0)-(a.date||0)); // 网盘：从新到旧
     renderNetdisk(cat);
   }
   catch(e){el.netdiskGrid.innerHTML='<div class="empty-hint">加载失败：'+e.message+'</div>';}
