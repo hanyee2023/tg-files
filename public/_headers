@@ -1,0 +1,6 @@
+# Cloudflare Pages 响应头：index.html 强制不缓存（防止手机端拿到旧 HTML 引用已删除的旧 JS）
+/index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+  X-Content-Type-Options: nosniff
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
