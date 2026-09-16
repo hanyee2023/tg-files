@@ -6,11 +6,45 @@ import { NewMessage } from 'telegram/events';
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.16.8';
-console.log('[tg] build', BUILD, '· 卡片正方形兼容 + 屏显版本号');
-const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
-const API_HASH = import.meta.env.VITE_API_HASH || '';
-const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
+const BUILD='v2026.09.16.11';
+console.log('[tg] build', BUILD, '· 移动端登录修复(WS arraybuffer + 重连守卫) + 屏显错误栈诊断');
+// 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage
+// 这样即便直接上传未带密钥的 dist，也能在页面里填一次 API_ID/HASH/代理，免去反复重新打包
+function _readCfg(){
+  const env=import.meta.env||{};
+  const w=(typeof window!=='undefined'&&window.__TG_CONFIG)||{};
+  const ls=(typeof localStorage!=='undefined')?{a:localStorage.getItem('tg_api_id'),h:localStorage.getItem('tg_api_hash'),p:localStorage.getItem('tg_proxy')}:{};
+  return {
+    apiId: env.VITE_API_ID||w.apiId||ls.a||'',
+    apiHash: env.VITE_API_HASH||w.apiHash||ls.h||'',
+    proxy: env.VITE_PROXY_DOMAIN||w.proxy||ls.p||'',
+  };
+}
+const _cfg=_readCfg();
+const API_ID = parseInt(_cfg.apiId || '0');
+const API_HASH = _cfg.apiHash || '';
+const PROXY_DOMAIN = _cfg.proxy || '';
+// 暴露配置状态到全局，供页面上的“屏显诊断”读取（无需 F12）
+window.__CFG={build:BUILD, api:!!API_ID, hash:!!API_HASH, proxy:PROXY_DOMAIN||'(未设置)'};
+// 点击左下角版本号可临时填写/修改 API_ID、API_HASH、代理域名（存 localStorage，无需重新打包）
+function openConfig(){
+  try{
+    const a=prompt('API_ID（数字，留空则用构建期环境变量）',_cfg.apiId||''); if(a===null)return;
+    const h=prompt('API_HASH（字符串）',_cfg.apiHash||''); if(h===null)return;
+    const p=prompt('代理域名（如 web.cutup.de5.net，留空则用环境变量）',_cfg.proxy||'');
+    localStorage.setItem('tg_api_id',a.trim()); localStorage.setItem('tg_api_hash',h.trim()); localStorage.setItem('tg_proxy',p.trim());
+    alert('已保存，正在重新加载…'); location.reload();
+  }catch(e){}
+}
+// 创建左下角可点击版本号（显示构建版本 + 配置状态），点击打开配置
+(function(){
+  let t=document.getElementById('buildTag');
+  if(!t){ t=document.createElement('div'); t.id='buildTag'; document.body.appendChild(t); }
+  t.style.pointerEvents='auto'; t.style.cursor='pointer';
+  const cfg=window.__CFG||{};
+  t.textContent='build '+cfg.build+' · API:'+(cfg.api?'✓':'✗')+' 代理:'+(cfg.proxy&&cfg.proxy!=='(未设置)'?cfg.proxy.slice(0,18):'未设');
+  t.onclick=openConfig;
+})();
 
 // ===== 代理：重写 GramJS 内部 WebSocket 地址 =====
 class ProxiedWebSockets extends PromisedWebSockets {
@@ -26,6 +60,42 @@ class ProxiedWebSockets extends PromisedWebSockets {
     const direct = super.getWebSocketLink(ip, port, testServers);
     console.warn('[tg] WebSocket 直连（未走代理）→', direct, '—— 国内环境大概率连接超时！');
     return direct;
+  }
+  // 覆盖 connect：显式把二进制类型设为 arraybuffer（移动端 WebView 默认是 blob，
+  // 配合下方 receive() 直接 Buffer.from(arraybuffer)，避免 new Response(blob) 在部分移动端解析异常）
+  async connect(port, ip, testServers = false) {
+    const p = await super.connect(port, ip, testServers);
+    try { this.client && (this.client.binaryType = 'arraybuffer'); } catch (e) {}
+    return p;
+  }
+  // 覆盖 receive：健壮地把 WS 收到的二进制转成 Buffer，兼容 ArrayBuffer / Blob / 字符串，
+  // 不再依赖 new Response(message.data).arrayBuffer()（部分移动端 WebView 不支持）
+  async receive() {
+    const self = this;
+    if (!this.client) return;
+    this.client.onmessage = async (message) => {
+      let data;
+      try {
+        const md = message.data;
+        if (typeof ArrayBuffer !== 'undefined' && md instanceof ArrayBuffer) {
+          data = Buffer.from(md);
+        } else if (typeof Blob !== 'undefined' && md instanceof Blob) {
+          data = Buffer.from(await md.arrayBuffer());
+        } else if (typeof md === 'string') {
+          data = Buffer.from(md, 'binary');
+        } else if (md && md.buffer) {
+          // Uint8Array / Buffer
+          data = Buffer.from(md);
+        } else {
+          data = Buffer.from(md);
+        }
+      } catch (e) {
+        console.warn('[tg] WS 数据解析失败（已忽略该包）：', e && e.message);
+        return;
+      }
+      this.stream = Buffer.concat([this.stream, data]);
+      if (this.resolveRead) this.resolveRead(true);
+    };
   }
 }
 if (!PROXY_DOMAIN) console.warn('[tg] 未设置 VITE_PROXY_DOMAIN，将直连 Telegram（国内大概率失败）。');
@@ -344,7 +414,14 @@ async function init(){
   setupLogin();
   setupChatSearch();
   // 屏幕可见版本号：手机上不用 F12 也能确认部署是否更新（左下角小字）
-  try{const t=document.createElement('div');t.id='buildTag';t.textContent=BUILD;document.body.appendChild(t);}catch(e){}
+  // 屏幕可见诊断：手机端不用 F12 也能确认版本 + API/代理是否配好；点一下复制全文
+  try{
+    const bt=document.createElement('div');bt.id='buildTag';bt.title='点击复制诊断信息';
+    const upd=()=>{const c=window.__CFG||{};bt.textContent='['+(c.build||'?')+'] API:'+(c.api?'✓':'✗')+' 代理:'+c.proxy;};
+    upd();setTimeout(upd,1500);
+    bt.onclick=()=>{try{navigator.clipboard.writeText(bt.textContent);}catch(e){}};
+    document.body.appendChild(bt);
+  }catch(e){}
   const sessionStr=localStorage.getItem('tg_session')||'';
   if(!API_ID || !API_HASH){
     const ov=document.getElementById('connOverlay');
@@ -396,15 +473,43 @@ async function tryConnect(){
     const me=await client.getMe();
     finishLogin(me);
   }catch(e){
-    console.error('[tg] 连接失败（'+((Date.now()-t0)/1000).toFixed(1)+'s）：',e);
+    const dt=((Date.now()-t0)/1000).toFixed(1);
+    console.error('[tg] 连接失败（'+dt+'s）：',e);
+    // 保存完整错误（含堆栈），供屏显诊断 / 复制给开发者
+    window.__lastConnectError = (e && (e.stack || (e.message + (e.cause ? ('\n'+(e.cause.stack||e.cause.message)) : '')))) || String(e);
     if(connAttempt<3){
       setConn('error',e.message);
       toast('连接失败，3 秒后自动重试（第 '+connAttempt+'/3 次）');
       setTimeout(async()=>{try{await Promise.race([client.disconnect(),new Promise(r=>setTimeout(r,3000))]);}catch(_){/**/}createClient(localStorage.getItem('tg_session')||'');tryConnect();},3000);
     }else{
-      showConnFail('已重试 3 次仍失败：'+(e&&e.message?e.message:e)+'。控制台（F12）中 [tg] 开头的日志会显示实际使用的 WebSocket 地址，请核对是否为 wss://tele.reader.cc.cd/…');
+      // 把完整错误（消息 + 堆栈）打到屏显诊断面板，手机端无 F12 也能看到根因
+      showConnectDiag(e);
     }
   }
+}
+// 屏显连接诊断：把完整错误信息（消息+堆栈）显示为可复制的浮层，便于在无 DevTools 的手机端定位根因
+function showConnectDiag(e){
+  const err=e||{};
+  const msg=err.message||String(e);
+  const stack=err.stack||(err.cause&&(err.cause.stack||err.cause.message))||'(无堆栈)';
+  const cfg=window.__CFG||{};
+  const detail='[错误] '+msg+'\n\n[堆栈]\n'+stack+'\n\n[配置] build='+cfg.build
+    +' API='+(cfg.api?'已填':'缺失')+' HASH='+(cfg.hash?'已填':'缺失')+' 代理='+cfg.proxy;
+  console.warn('[tg] 连接诊断\n'+detail);
+  let d=document.getElementById('__connDiag');
+  if(!d){
+    d=document.createElement('div');d.id='__connDiag';
+    d.style.cssText='position:fixed;left:0;right:0;top:0;background:#1b1b1f;color:#ffb4ab;font:12px/1.5 monospace;padding:12px 14px;z-index:99999;max-height:55vh;overflow:auto;box-shadow:0 2px 10px rgba(0,0,0,.4);white-space:pre-wrap;';
+    document.body.appendChild(d);
+  }
+  d.innerHTML='<b>⚠ 连接 Telegram 失败（已重试 3 次）</b>\n'
+    +detail.split('\n').map(l=>l.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))).join('\n')
+    +'\n\n<button id="__diagCopy" style="margin-top:8px;padding:4px 10px;background:#ffb4ab;color:#1b1b1f;border:0;border-radius:6px;">复制完整错误</button> '
+    +'<button id="__diagRetry" style="margin-top:8px;padding:4px 10px;background:#3a7afe;color:#fff;border:0;border-radius:6px;">重新连接</button>';
+  const cp=document.getElementById('__diagCopy');
+  if(cp)cp.onclick=()=>{try{navigator.clipboard.writeText(d.innerText);toast('已复制');}catch(_){}};
+  const rt=document.getElementById('__diagRetry');
+  if(rt)rt.onclick=()=>{connAttempt=0;createClient(localStorage.getItem('tg_session')||'');tryConnect();};
 }
 function showConnFail(reason){
   setConn('error',reason.length>40?reason.slice(0,40)+'…':reason);
@@ -1193,15 +1298,15 @@ function renderNetdisk(cat){
   const q=($('netdiskSearchInput').value||'').trim().toLowerCase();
   let list=cat==='all'?netdiskMediaList:netdiskMediaList.filter(m=>netdiskCategory(m)===cat);
   if(q)list=list.filter(m=>displayName(m).toLowerCase().includes(q));
-  el.netdiskGrid.className=netdiskView==='list'?'list-mode':'';
+  el.netdiskGrid.className=netdiskView==='list'?'list-mode':'nk2';
   el.netdiskGrid.innerHTML='';
   if(!list.length){el.netdiskGrid.innerHTML='<div class="empty-hint">'+(q?'未找到匹配的文件':'暂无文件')+'</div>';return;}
   list.forEach((msg,i)=>{
     const info=mediaInfo(msg);
     const name=displayName(msg);
-    const more=document.createElement('button');more.className='nk-act';more.textContent='⋯';more.title='更多';
-    more.onclick=(ev)=>{ev.stopPropagation();openCardMenu(more,msg);};
     if(netdiskView==='list'){
+      const more=document.createElement('button');more.className='nk-act';more.textContent='⋯';more.title='更多';
+      more.onclick=(ev)=>{ev.stopPropagation();openCardMenu(more,msg);};
       const row=document.createElement('div');row.className='nk-row';
       const th=document.createElement('div');th.className='nk-thumb sm';
       th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
@@ -1212,23 +1317,23 @@ function renderNetdisk(cat){
       el.netdiskGrid.appendChild(row);
       loadThumb(th,msg);
     }else{
-      const card=document.createElement('div');card.className='nk-card';
-      const nameBar=document.createElement('div');nameBar.className='nk-name-bar';nameBar.textContent=name;
-      const th=document.createElement('div');th.className='nk-thumb';
+      // 卡片模式（全新 nk2 结构）：方形封面 + 圆角卡片 + 下方文件名 + 右上角操作
+      const card=document.createElement('div');card.className='nk2-card';
+      const th=document.createElement('div');th.className='nk2-thumb';
       th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
-      if(info.type==='video')th.classList.add('play');else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
-      const footer=document.createElement('div');footer.className='nk-footer';
-      const nm=document.createElement('div');nm.className='nk-name';nm.textContent=fmtSize(info.size);
-      const tm=document.createElement('div');tm.className='nk-time';tm.textContent=msg.date?fmtTime(msg.date).split(' ')[1]:'';
-      footer.append(nm,tm);
-      card.append(nameBar,th,footer,more);card.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
+      if(info.type==='video')th.innerHTML='<span class="nk2-play"></span>';
+      else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
+      const nm=document.createElement('div');nm.className='nk2-name';nm.textContent=name;
+      const more=document.createElement('button');more.className='nk2-more';more.textContent='⋯';more.title='更多';
+      more.onclick=(ev)=>{ev.stopPropagation();openCardMenu(more,msg);};
+      card.append(th,nm,more);card.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
       el.netdiskGrid.appendChild(card);
       loadThumb(th,msg);
     }
   });
-  // 老内核兜底：若 padding-bottom 撑高在极老浏览器上仍未生效（缩略图高度≈0），用 JS 按宽度显式设高
+  // 兜底：渲染后逐个检测封面高度，若 CSS 撑高失效（高度≈0）则用 JS 按宽度显式设像素高
   requestAnimationFrame(()=>{
-    el.netdiskGrid.querySelectorAll('.nk-thumb').forEach(t=>{
+    el.netdiskGrid.querySelectorAll('.nk2-thumb').forEach(t=>{
       const r=t.getBoundingClientRect();
       if(r.width>60&&r.height<r.width*0.6)t.style.height=r.width+'px';
     });
