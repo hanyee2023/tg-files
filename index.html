@@ -416,6 +416,12 @@
       var src=(t&&t.src)||(t&&t.href)||(e&&e.filename)||'';
       // Cloudflare Pages 自动注入的 analytics 脚本加载失败，不是应用代码问题，忽略
       if(src.includes('cloudflareinsights.com')){console.warn('[ignore] cloudflareinsights error');return;}
+      // 媒体元素(video/audio/img)的加载/解码错误：流式播放中部分片段解码失败、换源瞬间等都属预期，
+      // 会自动降级/恢复（如等待完整数据后重播），不是应用崩溃，不打红条
+      if(t&&(t.tagName==='VIDEO'||t.tagName==='AUDIO'||t.tagName==='SOURCE'||t.tagName==='IMG')){
+        console.warn('[ignore] 媒体加载/解码错误（流式播放中属预期，可自动恢复）：',(t.currentSrc||t.src||'').slice(0,90),t.error?('code='+t.error.code):'');
+        return;
+      }
       var err=e&&e.error?e.error:e;
       var msg=describeError(err);
       if(e&&e.filename&&!msg.includes('文件:'))msg='文件: '+e.filename+':'+(e.lineno||'?')+':'+(e.colno||'?')+'\n'+msg;
