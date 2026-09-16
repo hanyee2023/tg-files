@@ -58,6 +58,12 @@ const el = {
   detailsContent: $('detailsContent'), dAvatar: $('dAvatar'), dName: $('dName'),
   dSub: $('dSub'), dAbout: $('dAbout'), dStat: $('dStat'), dStatMore: $('dStatMore'),
   chatMenu: $('chatMenu'), toast: $('toast'),
+  btnChatSearch: $('btnChatSearch'),
+  chatSearch: $('chatSearch'), chatSearchInput: $('chatSearchInput'),
+  chatSearchResults: $('chatSearchResults'), chatSearchClose: $('chatSearchClose'), chatSearchLoading: $('chatSearchLoading'),
+  login: $('login'), loginPhone: $('loginPhone'), loginSend: $('loginSend'),
+  loginStepPhone: $('loginStepPhone'), loginStepCode: $('loginStepCode'), loginCode: $('loginCode'),
+  loginVerify: $('loginVerify'), loginBack: $('loginBack'), loginErr: $('loginErr'),
   mediaBrowser: $('mediaBrowser'), mediaBrowserGrid: $('mediaBrowserGrid'),
   mediaBrowserTitle: $('mediaBrowserTitle'), mediaBrowserClose: $('mediaBrowserClose'),
   btnNetdiskView: $('btnNetdiskView'), btnMediaView: $('btnMediaView'),
@@ -270,6 +276,8 @@ async function init(){
   applyChatBg();
   injectMobileCss();
   setupDetailsClose();
+  setupLogin();
+  setupChatSearch();
   const sessionStr=localStorage.getItem('tg_session')||'';
   if(!API_ID || !API_HASH){
     el.messages.innerHTML='<div class="empty-hint">未配置 API_ID / API_HASH。请在 Cloudflare Pages 的环境变量中设置 VITE_API_ID、VITE_API_HASH、VITE_PROXY_DOMAIN，然后重新部署。</div>';
@@ -280,16 +288,7 @@ async function init(){
   const saved=localStorage.getItem('tg_self');
   if(saved){try{selfMe=JSON.parse(saved);showAccount(selfMe);}catch(e){}}
   if(!sessionStr||sessionStr.length<20){
-    const phone=prompt('请输入手机号（含国家码，如 +8613800000000）：');
-    if(!phone){el.messages.innerHTML='<div class="empty-hint">未登录</div>';return;}
-    try{
-      setConn('connecting');
-      await client.connect();
-      const sent=await client.sendCode({apiId:API_ID,apiHash:API_HASH,phoneNumber:phone});
-      const code=prompt('请输入 Telegram 发来的验证码：');
-      const sign=await client.signIn({phoneNumber:phone,phoneCodeHash:sent.phoneCodeHash,phoneCode:code});
-      finishLogin(sign);
-    }catch(e){setConn('error',e.message);alert('登录失败：'+e.message);}
+    showLogin();   // 未登录 → 显示登录页（主页被覆盖）；有登录记录则自动进入主页
     return;
   }
   try{
@@ -327,6 +326,87 @@ function showAccount(me){
   if(client)loadAvatarInto(el.accAvatar,me);
 }
 
+// ===== 页面内登录（替代 prompt，未登录显示登录页，有登录记录自动进主页）=====
+let loginPhoneCodeHash=null;
+function showLogin(){el.login.classList.remove('hidden');}
+function hideLogin(){el.login.classList.add('hidden');}
+function setupLogin(){
+  el.loginSend.onclick=async()=>{
+    const phone=el.loginPhone.value.trim();
+    if(!phone){el.loginErr.textContent='请输入手机号';return;}
+    el.loginErr.textContent='连接中…';
+    try{
+      setConn('connecting');
+      await client.connect();
+      const sent=await client.sendCode({apiId:API_ID,apiHash:API_HASH,phoneNumber:phone});
+      loginPhoneCodeHash=sent.phoneCodeHash;
+      el.loginStepPhone.style.display='none';
+      el.loginStepCode.style.display='flex';
+      el.loginErr.textContent='';
+    }catch(e){setConn('error',e.message);el.loginErr.textContent='发送失败：'+(e&&e.message?e.message:e);}
+  };
+  el.loginVerify.onclick=async()=>{
+    const code=el.loginCode.value.trim();
+    if(!code){el.loginErr.textContent='请输入验证码';return;}
+    el.loginErr.textContent='登录中…';
+    try{
+      const sign=await client.signIn({phoneNumber:el.loginPhone.value.trim(),phoneCodeHash:loginPhoneCodeHash,phoneCode:code});
+      hideLogin();finishLogin(sign);
+    }catch(e){el.loginErr.textContent='登录失败：'+(e&&e.message?e.message:e);}
+  };
+  el.loginBack.onclick=()=>{el.loginStepCode.style.display='none';el.loginStepPhone.style.display='flex';el.loginErr.textContent='';};
+  el.loginPhone.addEventListener('keydown',e=>{if(e.key==='Enter')el.loginSend.click();});
+  el.loginCode.addEventListener('keydown',e=>{if(e.key==='Enter')el.loginVerify.click();});
+}
+
+// ===== 群内搜索（搜索当前对话的历史聊天记录 / 媒体）=====
+function setupChatSearch(){
+  el.btnChatSearch.onclick=()=>{
+    if(!currentEntity)return;
+    el.chatSearch.classList.remove('hidden');
+    el.chatSearchResults.innerHTML='';
+    el.chatSearchInput.value='';
+    setTimeout(()=>el.chatSearchInput.focus(),50);
+    runChatSearch('');
+  };
+  el.chatSearchClose.onclick=()=>el.chatSearch.classList.add('hidden');
+  let csTimer=null;
+  el.chatSearchInput.addEventListener('input',()=>{clearTimeout(csTimer);csTimer=setTimeout(()=>runChatSearch(el.chatSearchInput.value.trim()),300);});
+}
+async function runChatSearch(q){
+  if(!currentEntity)return;
+  if(!q){el.chatSearchResults.innerHTML='<div class="cs-empty">输入关键词搜索此对话的聊天记录</div>';return;}
+  el.chatSearchLoading.style.display='flex';
+  el.chatSearchResults.innerHTML='';
+  try{
+    const r=await client.invoke(new Api.messages.Search({peer:currentEntity, q, limit:60, filter:new Api.InputMessagesFilterEmpty()}));
+    const msgs=(r.messages||[]).filter(m=>m&&(m.message||m.media));
+    el.chatSearchLoading.style.display='none';
+    if(!msgs.length){el.chatSearchResults.innerHTML='<div class="cs-empty">未找到匹配的记录</div>';return;}
+    const list=[];
+    for(const m of msgs){
+      const info=mediaInfo(m);
+      const sender=await getSender(m);
+      const name=sender?chatName(sender):(m.out?'我':chatName(currentEntity));
+      let prev=m.message?m.message:'';
+      const th=document.createElement('div');th.className='cs-thumb';
+      if(info&&(info.type==='image'||info.type==='video'||info.type==='gif')){th.classList.add('play');prev='['+(info.type==='video'?'视频':info.type==='gif'?'GIF':'图片')+'] '+(prev||info.name);}
+      else if(info&&info.type==='audio'){prev='[音频] '+(prev||info.name);}
+      else if(info&&info.type==='file'){prev='[文件] '+(prev||info.name);}
+      const meta=document.createElement('div');meta.className='cs-meta';
+      meta.innerHTML=`<div class="cs-name">${escapeHtml(name)}</div><div class="cs-prev">${escapeHtml(prev||'')}</div>`;
+      const row=document.createElement('div');row.className='cs-item';row.append(th,meta);
+      const idx=list.length;list.push(m);
+      row.onclick=()=>{el.chatSearch.classList.add('hidden');openViewer(list,idx,'chat',currentEntity);};
+      el.chatSearchResults.appendChild(row);
+      if(info&&(info.type==='image'||info.type==='video'||info.type==='gif')){th._thumbMsg=m;th._cacheKey=currentEntity.id+':'+m.id;ensureObserver();lazyObserver.observe(th);loadThumb(th,m);}
+    }
+  }catch(e){
+    el.chatSearchLoading.style.display='none';
+    el.chatSearchResults.innerHTML='<div class="cs-empty">搜索失败：'+(e&&e.message?e.message:e)+'</div>';
+  }
+}
+
 // ===== 对话列表（全部显示头像，贴近官方）=====
 async function loadDialogs(){
   try{
@@ -359,12 +439,14 @@ el.searchInput.addEventListener('input',()=>{clearTimeout(searchTimer);searchTim
 async function doSearch(){
   const q=el.searchInput.value.trim();
   if(!q){renderDialogs(currentDialogs);return;}
-  const local=currentDialogs.filter(d=>(d.name||'').toLowerCase().includes(q.toLowerCase()));
+  const ql=q.toLowerCase();
+  const local=currentDialogs.filter(d=>(d.name||'').toLowerCase().includes(ql));
   let global=[];
   try{
     const r=await client.invoke(new Api.contacts.Search({q,limit:20}));
-    const localIds=new Set(currentDialogs.map(d=>d.id));
-    for(const ch of r.chats){if(!localIds.has(ch.id))global.push({entity:ch,name:chatName(ch),message:null,id:ch.id,joined:false});}
+    const seen=new Set(local.map(d=>d.id));
+    for(const ch of (r.chats||[])){if(!seen.has(ch.id)){global.push({entity:ch,name:chatName(ch),message:null,id:ch.id,joined:false});seen.add(ch.id);}}
+    for(const u of (r.users||[])){if(!seen.has(u.id)){global.push({entity:u,name:chatName(u),message:null,id:u.id,joined:false});seen.add(u.id);}}
   }catch(e){}
   renderDialogs(local.concat(global));
 }
@@ -387,6 +469,7 @@ async function loadMessages(){
     const msgs=await client.getMessages(currentEntity,{limit:40});
     el.messages.innerHTML='';currentMediaList=[];
     for(const m of msgs.reverse())await appendMessage(m,false);
+    flushAlbum(false);
     oldestId=msgs.length?msgs[0].id:null;
     loadingOlder=false;
     el.messages.scrollTop=el.messages.scrollHeight;
@@ -402,6 +485,7 @@ async function loadOlder(){
     const msgs=await client.getMessages(currentEntity,{limit:40,offsetId:oldestId});
     if(msgs&&msgs.length){
       for(const m of msgs.reverse())await appendMessage(m,true);
+      flushAlbum(true);
       oldestId=msgs[0].id;
       // 保持滚动位置不跳动
       el.messages.scrollTop=prevTop+(el.messages.scrollHeight-prevH);
@@ -412,13 +496,29 @@ async function loadOlder(){
 el.messages.addEventListener('scroll',()=>{ if(el.messages.scrollTop<60) loadOlder(); });
 
 // ===== 渲染单条消息 =====
+// 一条消息含多条媒体（相册）时合并为一张拼图卡
+let pendingAlbum=null;
 async function appendMessage(msg, prepend){
-  const info=mediaInfo(msg);
-  const row=document.createElement('div');row.className='row '+(msg.out?'out':'in');
-  const bubble=document.createElement('div');bubble.className='msg';bubble.dataset.id=msg.id;
+  if(msg.groupedId!=null){
+    if(pendingAlbum && pendingAlbum.id===msg.groupedId) pendingAlbum.msgs.push(msg);
+    else { flushAlbum(prepend); pendingAlbum={id:msg.groupedId, msgs:[msg]}; }
+  }else{
+    flushAlbum(prepend);
+    await renderItem([msg], prepend);
+  }
+}
+function flushAlbum(prepend){
+  if(!pendingAlbum)return;
+  const items=pendingAlbum.msgs; pendingAlbum=null;
+  renderItem(items, prepend);
+}
+async function renderItem(items, prepend){
+  const first=items[0];
+  const row=document.createElement('div');row.className='row '+(first.out?'out':'in');
+  const bubble=document.createElement('div');bubble.className='msg';bubble.dataset.id=first.id;
   const grp=isGroup(currentEntity);
-  if(!msg.out&&grp){
-    const s=await getSender(msg);
+  if(!first.out&&grp){
+    const s=await getSender(first);
     if(s){
       const sr=document.createElement('div');sr.className='sender-row';
       const sa=document.createElement('div');sa.className='avatar xs';loadAvatarInto(sa,s);
@@ -426,15 +526,20 @@ async function appendMessage(msg, prepend){
       sr.append(sa,sn);bubble.appendChild(sr);
     }
   }
-  if(msg.message&&typeof msg.message==='string'&&msg.message.trim())bubble.innerHTML+=`<div class="text">${escapeHtml(msg.message)}</div>`;
-  if(info){
-    const media=document.createElement('div');media.className='msg-media';
+  const text=items.map(m=>m.message||'').filter(Boolean).join('\n');
+  if(text)bubble.innerHTML+=`<div class="text">${escapeHtml(text)}</div>`;
+  // 注册底层消息（供查看器 / 点击播放导航）；记住第一条索引
+  const startIdx=currentMediaList.length;
+  if(prepend){ for(let i=items.length-1;i>=0;i--)currentMediaList.unshift(items[i]); }
+  else { for(const m of items)currentMediaList.push(m); }
+  const media=document.createElement('div');media.className='msg-media'+(items.length>1?' album':'');
+  if(items.length===1){
+    const msg=items[0];const info=mediaInfo(msg);
     const key=currentEntity.id+':'+msg.id;
     media._thumbMsg=msg;media._cacheKey=key;
     if(info.type==='image'||info.type==='video'||info.type==='gif'){
       const ph=document.createElement('div');ph.className='lazy-ph';media.appendChild(ph);
       if(info.type==='video'){
-        // 左下角：圆形进度条 + 播放按钮 + 视频大小（去掉原来的居中大播放按钮）
         const vb=document.createElement('div');vb.className='vbtn';
         vb.innerHTML=`<span class="vbtn-bg"><svg viewBox="0 0 36 36" width="30" height="30"><circle cx="18" cy="18" r="15" fill="rgba(0,0,0,.45)"/><circle class="cp" cx="18" cy="18" r="15" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg><span class="vplay">${ICONS.playSmall}</span></span>${info.size?`<span class="vsize">${fmtSize(info.size)}</span>`:''}`;
         media.appendChild(vb);
@@ -447,13 +552,21 @@ async function appendMessage(msg, prepend){
       fc.innerHTML=`<div class="fi">${ICONS.file}</div><div style="min-width:0"><div class="fn">${escapeHtml(info.name)}</div><div class="fs">${fmtSize(info.size)}</div></div>`;
       media.appendChild(fc);
     }
-    bubble.appendChild(media);
-    if(prepend)currentMediaList.unshift(msg);else currentMediaList.push(msg);
+  }else{
+    for(const m of items){
+      const info=mediaInfo(m);
+      const cell=document.createElement('div');cell.className='album-cell';
+      if(info&&(info.type==='video'||info.type==='gif'))cell.classList.add('play');
+      cell._thumbMsg=m;cell._cacheKey=currentEntity.id+':'+m.id;
+      media.appendChild(cell);
+      ensureObserver();lazyObserver.observe(cell);
+    }
   }
+  bubble.appendChild(media);
   const acts=document.createElement('div');acts.className='msg-actions';
   acts.innerHTML=`<button class="act-btn" data-act="view" title="查看">${ICONS.view}</button><button class="act-btn" data-act="download" title="下载">${ICONS.download}</button><button class="act-btn" data-act="share" title="分享">${ICONS.share}</button><button class="act-btn del" data-act="delete" title="删除">${ICONS.del}</button>`;
   bubble.appendChild(acts);
-  const mt=document.createElement('div');mt.className='mt';mt.textContent=fmtTime(msg.date).split(' ')[1]||'';bubble.appendChild(mt);
+  const mt=document.createElement('div');mt.className='mt';mt.textContent=fmtTime(first.date).split(' ')[1]||'';bubble.appendChild(mt);
   row.appendChild(bubble);
   if(prepend)el.messages.insertBefore(row,el.messages.firstChild);else el.messages.appendChild(row);
 }
@@ -468,6 +581,8 @@ el.messages.addEventListener('click',async(e)=>{
     else if(act==='share')shareMedia(msg);
     else if(act==='delete')deleteMessage(id);
     return;}
+  const cell=e.target.closest('.album-cell');
+  if(cell){const msg=cell._thumbMsg;const idx=currentMediaList.indexOf(msg);if(idx>=0)openViewer(currentMediaList,idx,'chat',currentEntity);return;}
   const vbtn=e.target.closest('.vbtn');
   if(vbtn){const host=vbtn.closest('.msg-media');const id=parseInt(vbtn.closest('.msg').dataset.id);const msg=currentMediaList.find(m=>m.id===id);if(msg)playVideo(host,msg,currentEntity);return;}
   const play=e.target.closest('.play-overlay');
@@ -937,7 +1052,7 @@ el.netdiskFileInput.addEventListener('change',async(e)=>{
 // ===== 实时消息 =====
 async function onNewMessage(event){
   const msg=event.message;if(!msg||!msg.message&&!msg.media)return;
-  if(currentEntity&&msg.chat&&msg.chat.id===currentEntity.id){appendMessage(msg,false);el.messages.scrollTop=el.messages.scrollHeight;}
+  if(currentEntity&&msg.chat&&msg.chat.id===currentEntity.id){await appendMessage(msg,false);flushAlbum(false);el.messages.scrollTop=el.messages.scrollHeight;}
   if(netdiskChannel&&msg.chat&&msg.chat.id===netdiskChannel.id){if(mediaInfo(msg)){netdiskMediaList.unshift(msg);renderNetdisk(el.netdiskTabs.querySelector('.sel').dataset.cat);}}
 }
 
