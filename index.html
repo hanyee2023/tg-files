@@ -225,12 +225,13 @@
   .text-btn:hover{background:var(--tg-hover);}
 
   /* 媒体查看器 */
-  #viewer{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:220;display:none;align-items:center;justify-content:center;flex-direction:column;}
+  #viewer{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:220;display:none;align-items:center;justify-content:center;flex-direction:column;padding:54px 12px 16px;box-sizing:border-box;}
   #viewer.open{display:flex;}
   #viewerMedia{max-width:92vw;max-height:82vh;border-radius:8px;}
   #viewerBar{position:absolute;top:14px;left:0;right:0;display:flex;justify-content:space-between;padding:0 18px;}
-  #viewerNav{position:absolute;top:50%;width:100%;display:flex;justify-content:space-between;padding:0 14px;transform:translateY(-50%);}
-  #viewerNav button{width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;font-size:22px;}
+  #viewerNav{display:flex;justify-content:center;gap:48px;margin-top:16px;flex:0 0 auto;}
+  #viewerNav button{width:46px;height:46px;border-radius:50%;background:rgba(255,255,255,.14);color:#fff;font-size:24px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  #viewerNav button:hover{background:rgba(255,255,255,.26);}
   #viewerCap{position:absolute;bottom:20px;color:#fff;font-size:13px;max-width:80vw;text-align:center;opacity:.85;}
   .viewer-btn{width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,.12);color:#fff;display:flex;align-items:center;justify-content:center;}
   .viewer-btn svg{width:22px;height:22px;}
@@ -267,6 +268,13 @@
     .msg{max-width:85%;}
     /* 移动端详情作为右侧滑出覆盖层 */
     #details{position:fixed;top:0;right:0;height:100vh;z-index:150;box-shadow:-4px 0 20px rgba(0,0,0,.2);width:84vw;max-width:340px;}
+    /* 网盘 / 媒体浏览器卡片模式：手机端用自适应网格，避免横向 masonry 排版 */
+    #netdiskGrid:not(.list-mode),#mediaBrowserGrid:not(.list-mode){display:grid;grid-template-columns:repeat(auto-fill,minmax(108px,1fr));column-width:auto;gap:9px;padding:10px;align-content:start;}
+    #netdiskGrid:not(.list-mode) .nk-card,#mediaBrowserGrid:not(.list-mode) .mb-card{display:flex;width:100%;margin:0;}
+    .nk-thumb,.mb-thumb{min-height:0;}
+    /* 列表模式更紧凑 */
+    .nk-thumb.sm{width:44px;height:44px;}
+    .nk-row{padding:6px 10px;gap:10px;}
   }
   /* 视频加载遮罩：大号蓝色圆环 + 百分比（实时下载进度） */
   .vp-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:3;pointer-events:none;}
@@ -283,7 +291,7 @@
   #netdiskGrid:not(.list-mode) .nk-card, #mediaBrowserGrid:not(.list-mode) .mb-card{width:100%;margin:0 0 14px;break-inside:avoid;display:inline-block;}
 
   /* 媒体查看器进度遮罩 */
-  #viewerProgress{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(60vw,300px);height:6px;border-radius:3px;background:rgba(255,255,255,.25);overflow:hidden;z-index:5;display:none;}
+  #viewerProgress{position:relative;margin:14px auto 0;width:min(60vw,300px);height:6px;border-radius:3px;background:rgba(255,255,255,.25);overflow:hidden;z-index:5;display:none;}
   #viewerProgress > i{display:block;height:100%;width:0;background:#fff;transition:width .2s;}
   /* 连接状态芯片 */
   #conn-chip{position:fixed;top:12px;right:16px;z-index:9999;display:flex;align-items:center;gap:8px;background:var(--tg-card,#fff);border:1px solid rgba(0,0,0,.08);border-radius:999px;padding:6px 14px;font-size:13px;color:#707579;box-shadow:0 2px 10px rgba(0,0,0,.08);transition:opacity .5s;pointer-events:none;}
@@ -292,6 +300,42 @@
   .conn-dot.ok{background:#4caf50;}
   .conn-dot.err{background:#e53935;}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* 相册（一条消息多条媒体）拼图 */
+  .msg-media.album{display:grid;gap:2px;background:var(--tg-attach);border-radius:10px;overflow:hidden;min-width:180px;max-width:340px;margin-top:4px;}
+  .album-cell{position:relative;aspect-ratio:1;background:var(--tg-attach) center/cover no-repeat;min-height:84px;cursor:pointer;}
+  .album-cell.play::after{content:"";position:absolute;inset:0;margin:auto;width:0;height:0;border-left:18px solid #fff;border-top:11px solid transparent;border-bottom:11px solid transparent;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6));}
+
+  /* 登录页 */
+  #login{position:fixed;inset:0;z-index:500;display:flex;align-items:center;justify-content:center;background:var(--tg-bg);}
+  #login.hidden{display:none;}
+  .login-card{width:min(92vw,360px);background:var(--tg-panel);border-radius:16px;padding:30px 26px;box-shadow:var(--tg-shadow);text-align:center;}
+  .login-logo{font-size:42px;line-height:1;}
+  .login-card h1{font-size:22px;margin:10px 0 4px;color:var(--tg-text);}
+  .login-sub{font-size:13px;color:var(--tg-sub);margin:0 0 8px;}
+  .login-step{display:flex;flex-direction:column;gap:10px;margin-top:16px;text-align:left;}
+  .login-step label{font-size:13px;color:var(--tg-sub);}
+  .login-step input{width:100%;box-sizing:border-box;padding:11px 12px;border-radius:10px;border:1px solid var(--tg-border);background:var(--tg-bg);color:var(--tg-text);font-size:15px;outline:none;}
+  .login-step input:focus{border-color:var(--tg-blue);}
+  .login-btn{margin-top:4px;padding:11px 12px;border-radius:10px;border:none;background:var(--tg-blue);color:#fff;font-size:15px;font-weight:600;cursor:pointer;}
+  .login-btn:hover{filter:brightness(1.05);}
+  .login-link{background:none;border:none;color:var(--tg-sub);font-size:12px;cursor:pointer;margin-top:2px;}
+  .login-err{color:var(--tg-danger);font-size:13px;margin-top:12px;min-height:16px;text-align:center;}
+
+  /* 群内搜索 */
+  #chatSearch{position:fixed;inset:0;z-index:240;display:flex;flex-direction:column;background:var(--tg-bg);}
+  #chatSearch.hidden{display:none;}
+  .cs-bar{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--tg-border);background:var(--tg-panel);}
+  .cs-bar input{flex:1;box-sizing:border-box;padding:10px 12px;border-radius:10px;border:1px solid var(--tg-border);background:var(--tg-bg);color:var(--tg-text);font-size:15px;outline:none;}
+  .cs-bar input:focus{border-color:var(--tg-blue);}
+  #chatSearchResults{flex:1;overflow-y:auto;padding:8px 12px;}
+  .cs-item{display:flex;align-items:center;gap:12px;padding:10px 8px;border-radius:10px;cursor:pointer;}
+  .cs-item:hover{background:var(--tg-hover);}
+  .cs-thumb{width:46px;height:46px;border-radius:8px;flex:0 0 auto;background:var(--tg-attach) center/cover no-repeat;}
+  .cs-meta{min-width:0;flex:1;}
+  .cs-name{font-size:13px;font-weight:600;color:var(--tg-text);}
+  .cs-prev{font-size:13px;color:var(--tg-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .cs-empty{color:var(--tg-sub);font-size:14px;text-align:center;padding:30px;}
 </style>
 </head>
 <body>
@@ -369,6 +413,9 @@
         </div>
         <button id="btnChatMenu" class="icon-btn" title="更多">
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+        </button>
+        <button id="btnChatSearch" class="icon-btn" title="搜索聊天记录">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
         </button>
       </div>
       <div id="messages"><div class="empty-hint">选择一个对话开始聊天</div></div>
@@ -492,12 +539,12 @@
         </button>
       </div>
     </div>
-    <div id="viewerNav">
-      <button id="viewerPrev">‹</button>
-      <button id="viewerNext">›</button>
-    </div>
     <img id="viewerMedia" alt="">
-    <video id="viewerVideo" controls style="display:none;max-width:92vw;max-height:82vh;border-radius:8px;"></video>
+    <video id="viewerVideo" controls style="display:none;max-width:92vw;max-height:68vh;border-radius:8px;"></video>
+    <div id="viewerNav">
+      <button id="viewerPrev" title="上一张">‹</button>
+      <button id="viewerNext" title="下一张">›</button>
+    </div>
     <div id="viewerCap"></div>
   </div>
 
@@ -516,6 +563,39 @@
 
   <div id="chatMenu" class="menu"></div>
   <div id="toast"></div>
+
+  <!-- 登录页（未登录时显示） -->
+  <div id="login" class="hidden">
+    <div class="login-card">
+      <div class="login-logo">📁</div>
+      <h1>tg-files</h1>
+      <p class="login-sub">登录 Telegram 账号以浏览文件</p>
+      <div class="login-step" id="loginStepPhone">
+        <label>手机号（含国家码，如 +8613800000000）</label>
+        <input id="loginPhone" placeholder="+8613800000000" autocomplete="off" inputmode="tel">
+        <button id="loginSend" class="login-btn">发送验证码</button>
+      </div>
+      <div class="login-step" id="loginStepCode" style="display:none">
+        <label>验证码（Telegram 发来的短信）</label>
+        <input id="loginCode" placeholder="12345" autocomplete="off" inputmode="numeric">
+        <button id="loginVerify" class="login-btn">登录</button>
+        <button id="loginBack" class="login-link" type="button">← 返回修改手机号</button>
+      </div>
+      <div id="loginErr" class="login-err"></div>
+    </div>
+  </div>
+
+  <!-- 群内搜索 -->
+  <div id="chatSearch" class="hidden">
+    <div class="cs-bar">
+      <button id="chatSearchClose" class="icon-btn" title="关闭">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+      <input id="chatSearchInput" placeholder="搜索此对话的聊天记录…" autocomplete="off">
+    </div>
+    <div id="chatSearchResults"></div>
+    <div id="chatSearchLoading" class="empty-hint" style="display:none">搜索中…</div>
+  </div>
 
   <script type="module" src="/src/main.js"></script>
 </body>
