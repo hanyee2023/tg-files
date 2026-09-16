@@ -83,10 +83,10 @@
   .msg .text{white-space:pre-wrap;}
   .msg .mt{font-size:11px;opacity:.55;float:right;margin:4px 0 -2px 8px;}
 
-  .msg-media{position:relative;margin-top:4px;border-radius:10px;overflow:hidden;background:var(--tg-attach);min-height:60px;display:flex;align-items:center;justify-content:center;min-width:180px;}
+  .msg-media{position:relative;margin-top:4px;border-radius:10px;overflow:hidden;background:var(--tg-attach);min-height:60px;display:flex;align-items:center;justify-content:center;width:min(340px,72vw);max-width:100%;}
   .msg-media img{display:block;width:100%;max-width:340px;border-radius:10px;}
   .msg-media video{width:100%;max-width:340px;border-radius:10px;background:#000;display:block;}
-  .lazy-ph{width:100%;max-width:340px;aspect-ratio:4/3;height:auto;background:var(--tg-attach);border-radius:10px;background-size:cover;background-position:center;background-repeat:no-repeat;}
+  .lazy-ph{width:100%;height:100%;aspect-ratio:4/3;background:var(--tg-attach);border-radius:10px;background-size:cover;background-position:center;background-repeat:no-repeat;}
   .play-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.28);cursor:pointer;}
   .play-overlay svg{width:54px;height:54px;filter:drop-shadow(0 2px 4px rgba(0,0,0,.5));}
   .media-size{position:absolute;left:6px;bottom:6px;background:rgba(0,0,0,.55);color:#fff;font-size:11px;padding:2px 7px;border-radius:10px;z-index:2;}
@@ -207,7 +207,9 @@
   /* 网盘 / 媒体浏览器卡片：三段式（顶部名称 + 中部媒体铺满 + 底部文件名+时间） */
   .mb-card, .nk-card{background:var(--tg-panel);border-radius:12px;overflow:hidden;cursor:pointer;display:flex;flex-direction:column;box-shadow:var(--tg-shadow);}
   .mb-name-bar, .nk-name-bar{font-size:12px;font-weight:600;padding:7px 9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tg-text);border-bottom:1px solid var(--tg-border);}
-  .mb-thumb, .nk-thumb{width:100%;aspect-ratio:16/10;background:var(--tg-attach);display:flex;align-items:center;justify-content:center;background-size:cover;background-position:center;background-repeat:no-repeat;position:relative;min-height:120px;}
+  .mb-thumb{width:100%;aspect-ratio:16/10;background:var(--tg-attach);display:flex;align-items:center;justify-content:center;background-size:cover;background-position:center;background-repeat:no-repeat;position:relative;min-height:120px;}
+  /* 网盘封面：正方形铺满卡片 */
+  .nk-thumb{width:100%;aspect-ratio:1/1;background:var(--tg-attach);display:flex;align-items:center;justify-content:center;background-size:cover;background-position:center;background-repeat:no-repeat;position:relative;min-height:120px;}
   .mb-thumb.play::after, .nk-thumb.play::after{content:"";position:absolute;width:0;height:0;border-left:22px solid #fff;border-top:14px solid transparent;border-bottom:14px solid transparent;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6));}
   .mb-footer, .nk-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-top:1px solid var(--tg-border);}
   .mb-footer .mb-name, .nk-footer .nk-name{flex:1;min-width:0;font-size:11px;color:var(--tg-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -283,6 +285,13 @@
   /* 媒体查看器进度遮罩 */
   #viewerProgress{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:min(60vw,300px);height:6px;border-radius:3px;background:rgba(255,255,255,.25);overflow:hidden;z-index:5;display:none;}
   #viewerProgress > i{display:block;height:100%;width:0;background:#fff;transition:width .2s;}
+  /* 连接状态芯片 */
+  #conn-chip{position:fixed;top:12px;right:16px;z-index:9999;display:flex;align-items:center;gap:8px;background:var(--tg-card,#fff);border:1px solid rgba(0,0,0,.08);border-radius:999px;padding:6px 14px;font-size:13px;color:#707579;box-shadow:0 2px 10px rgba(0,0,0,.08);transition:opacity .5s;pointer-events:none;}
+  .conn-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
+  .conn-dot.on{background:#f5a623;animation:pulse 1.2s infinite;}
+  .conn-dot.ok{background:#4caf50;}
+  .conn-dot.err{background:#e53935;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
 </style>
 </head>
 <body>
