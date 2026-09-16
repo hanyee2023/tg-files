@@ -416,7 +416,15 @@
       if(err instanceof Event){
         var t=err.target||err.srcElement;
         var info='事件: '+(err.type||'error');
-        if(t){info+='\n元素: '+(t.tagName||'?');if(t.src)info+='\nsrc: '+t.src;if(t.href)info+='\nhref: '+t.href;if(t.currentSrc)info+='\ncurrentSrc: '+t.currentSrc;}
+        // ErrorEvent（JS 运行错误）但 error 为空时（跨域脚本被浏览器脱敏），至少把 message 带出来
+        if(err.message&&err.message!=='error')info+='\n消息: '+err.message;
+        if(t){
+          var tn=t.tagName||(t.constructor&&t.constructor.name)||'?';
+          info+='\n目标: '+tn;
+          if(t.tagName==='SCRIPT'&&t.src)info+='\n脚本: '+t.src;
+          else if(t.src)info+='\nsrc: '+t.src;
+          if(t.href)info+='\nhref: '+t.href;
+        }
         return info;
       }
       var parts=[];
@@ -446,6 +454,19 @@
       var r=e&&e.reason;
       showFatal('未处理 Promise 错误', describeError(r));
     });
+    // 自检：6 秒后主脚本仍未运行（window.__CFG 不存在）→ 说明 JS 加载失败。
+    // 最常见原因：手机缓存了旧版 index.html，引用的旧 hash JS 已被新部署删除（404）。
+    // 给出明确操作指引，替代令人困惑的"空白/报错"。
+    setTimeout(function(){
+      if(window.__CFG)return;
+      showFatal('脚本加载失败（页面已过时）',
+        '当前页面是旧缓存，它引用的 JS 文件在新部署中已不存在。\n'
+        +'请按顺序尝试：\n'
+        +'1. 下拉刷新本页 2~3 次\n'
+        +'2. 浏览器菜单 → 清除本站缓存/Cookie 后重开\n'
+        +'3. 或用无痕/隐私窗口打开本网址\n'
+        +'4. 仍不行请换一个浏览器（推荐 Chrome / Edge）');
+    },6000);
   })();
   </script>
   <div id="app">
@@ -651,6 +672,14 @@
         <button id="loginBack" class="login-link" type="button">← 返回修改手机号</button>
       </div>
       <div id="loginErr" class="login-err"></div>
+      <!-- API 配置表单：缺配置时自动展开，或点左下角版本号展开（存 localStorage，免重打包） -->
+      <div id="apiCfg" class="hidden" style="margin-top:14px;text-align:left;background:var(--tg-attach);border:1px solid var(--tg-border);border-radius:10px;padding:12px;">
+        <div style="font-size:12px;color:var(--tg-sub);line-height:1.5;margin-bottom:8px;">首次使用需填写 Telegram API 配置（<a href="https://my.telegram.org" target="_blank" rel="noopener" style="color:var(--tg-link,#3a7afe);">my.telegram.org</a> → API development tools 获取）。保存后仅存在本机浏览器，不会上传。</div>
+        <input id="cfgApiId" placeholder="API_ID（纯数字）" autocomplete="off" inputmode="numeric" style="width:100%;box-sizing:border-box;margin-bottom:8px;">
+        <input id="cfgApiHash" placeholder="API_HASH" autocomplete="off" style="width:100%;box-sizing:border-box;margin-bottom:8px;">
+        <input id="cfgProxy" placeholder="代理域名（如 web.cutup.de5.net）" autocomplete="off" style="width:100%;box-sizing:border-box;margin-bottom:10px;">
+        <button id="cfgSave" class="login-btn" style="width:100%;">保存并刷新</button>
+      </div>
     </div>
   </div>
 
