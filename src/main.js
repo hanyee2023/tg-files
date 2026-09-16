@@ -6,7 +6,7 @@ import { NewMessage } from 'telegram/events';
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-console.log('[tg] build 2026-09-16.6 · 主页恢复聊天模式 + 媒体错误不再弹红条');
+console.log('[tg] build 2026-09-16.7 · 卡片正方形兼容老浏览器(padding-bottom)');
 const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
 const API_HASH = import.meta.env.VITE_API_HASH || '';
 const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
