@@ -165,10 +165,16 @@
   .bg-swatch{width:28px;height:28px;border-radius:50%;border:1px solid var(--tg-border);cursor:pointer;}
   .bg-file{font-size:13px;color:var(--tg-blue);cursor:pointer;text-decoration:underline;}
 
-  /* 网盘（全屏） */
+  /* 网盘（全屏，应用主界面） */
   #netdisk{position:fixed;inset:0;width:100vw;height:100vh;max-width:100vw;z-index:200;background:var(--tg-bg);display:none;flex-direction:column;}
   #netdisk.open{display:flex;}
-  #netdiskTabs{display:flex;gap:6px;padding:10px 12px;overflow-x:auto;border-bottom:1px solid var(--tg-border);}
+  /* 顶栏：菜单 + 标题 + 搜索 + 视图切换 */
+  .nk-topbar{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--tg-border);background:var(--tg-panel);flex:0 0 auto;}
+  .nk-title{font-size:16px;font-weight:600;white-space:nowrap;flex:0 0 auto;}
+  .nk-search{flex:1;display:flex;align-items:center;gap:6px;background:var(--tg-panel-2);border-radius:20px;padding:0 12px;min-width:0;}
+  .nk-search svg{width:16px;height:16px;color:var(--tg-sub);flex:0 0 auto;}
+  .nk-search input{flex:1;border:none;outline:none;background:none;color:var(--tg-text);height:38px;font-size:14px;min-width:0;}
+  #netdiskTabs{display:flex;gap:6px;padding:10px 12px;overflow-x:auto;border-bottom:1px solid var(--tg-border);flex:0 0 auto;}
   #netdiskTabs button{flex:0 0 auto;padding:6px 14px;border-radius:16px;background:var(--tg-panel-2);color:var(--tg-sub);font-size:13px;font-weight:600;}
   #netdiskTabs button.sel{background:var(--tg-blue);color:#fff;}
   #netdiskGrid{flex:1;overflow-y:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;padding:14px;align-content:start;}
@@ -179,6 +185,19 @@
   .nk-name{font-size:11px;padding:6px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tg-sub);}
   .fab{position:fixed;right:20px;bottom:20px;width:56px;height:56px;border-radius:50%;background:var(--tg-blue);color:#fff;font-size:28px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(0,0,0,.3);z-index:210;}
   .fab:hover{filter:brightness(1.08);}
+  .fab svg{width:26px;height:26px;}
+
+  /* 卡片右上角“更多”操作按钮 + 弹出菜单 */
+  .nk-card{position:relative;}
+  .nk-row{position:relative;}
+  .nk-act{position:absolute;top:6px;right:6px;width:30px;height:30px;border-radius:50%;background:rgba(0,0,0,.45);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;line-height:1;border:none;cursor:pointer;z-index:4;}
+  .nk-act:hover{background:rgba(0,0,0,.65);}
+  .nk-row .nk-act{top:50%;transform:translateY(-50%);}
+  .card-menu{position:fixed;z-index:260;background:var(--tg-panel);border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.25);padding:6px;min-width:150px;display:none;}
+  .card-menu.open{display:block;}
+  .card-menu button{display:flex;align-items:center;width:100%;padding:10px 12px;border-radius:8px;font-size:14px;text-align:left;color:var(--tg-text);}
+  .card-menu button:hover{background:var(--tg-hover);}
+  .card-menu button.danger{color:var(--tg-danger);}
 
   /* 视频播放按钮：左下角圆形进度条 + 播放图标 + 视频大小（去掉居中大按钮） */
   .vbtn{position:absolute;left:6px;bottom:6px;display:flex;align-items:center;gap:6px;z-index:3;cursor:pointer;}
@@ -272,6 +291,10 @@
     body.chat-open #chat{display:flex;}
     #messages{padding:10px 8px;}
     .msg{max-width:85%;}
+    /* 网盘顶栏：窄屏隐藏标题，搜索框占满；悬浮上传按钮上移避免遮挡 */
+    .nk-title{display:none;}
+    .nk-topbar{padding:6px 8px;gap:6px;}
+    .fab{right:14px;bottom:74px;width:52px;height:52px;}
     /* 移动端详情作为右侧滑出覆盖层 */
     #details{position:fixed;top:0;right:0;height:100vh;z-index:150;box-shadow:-4px 0 20px rgba(0,0,0,.2);width:84vw;max-width:340px;}
     /* 网盘 / 媒体浏览器卡片模式：手机端用自适应网格，避免横向 masonry 排版 */
@@ -309,6 +332,14 @@
   .conn-dot.ok{background:#4caf50;}
   .conn-dot.err{background:#e53935;}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* 全局连接错误浮层 */
+  #connOverlay{position:fixed;inset:0;z-index:300;display:flex;align-items:center;justify-content:center;background:var(--tg-bg);padding:20px;}
+  #connOverlay.hidden{display:none;}
+  #connOverlay .box{max-width:540px;background:var(--tg-panel);border-radius:16px;padding:26px 24px;box-shadow:var(--tg-shadow);text-align:left;line-height:1.9;font-size:14px;}
+  #connOverlay .box b{color:var(--tg-danger);font-size:16px;}
+  #connOverlay .box code{background:var(--tg-panel-2);padding:1px 6px;border-radius:5px;font-size:12px;}
+  #connOverlay .box .recon{margin-top:16px;padding:10px 16px;border:none;border-radius:10px;background:var(--tg-blue);color:#fff;font-size:15px;font-weight:600;cursor:pointer;}
 
   /* 相册（一条消息多条媒体）拼图 */
   .msg-media.album{display:grid;grid-template-columns:repeat(3,1fr);gap:2px;background:var(--tg-attach);border-radius:10px;overflow:hidden;min-width:180px;max-width:340px;margin-top:4px;}
@@ -507,16 +538,19 @@
     </div>
   </div>
 
-  <!-- 网盘（全屏） -->
+  <!-- 网盘（全屏，应用主界面） -->
   <div id="netdisk">
-    <div class="panel-head">
-      <button id="btnNetdiskBack" class="icon-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></svg>
+    <div class="nk-topbar">
+      <button id="btnNetdiskMenu" class="icon-btn" title="菜单">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
       </button>
-      我的网盘<div class="spacer"></div>
-      <button id="btnNetdiskView" class="text-btn">☰ 列表</button>
-      <button id="btnNetdiskClose" class="icon-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      <div class="nk-title">我的网盘</div>
+      <div class="nk-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="netdiskSearchInput" placeholder="搜索文件" autocomplete="off">
+      </div>
+      <button id="btnNetdiskView" class="icon-btn" title="切换卡片/列表">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
       </button>
     </div>
     <div id="netdiskTabs">
@@ -528,9 +562,15 @@
       <button data-cat="file">文件</button>
     </div>
     <div id="netdiskGrid"></div>
-    <button id="btnNetdiskUpload" class="fab" title="上传">+</button>
+    <button id="btnNetdiskUpload" class="fab" title="上传">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
     <input id="netdiskFileInput" type="file" multiple hidden>
+    <div id="nkCardMenu" class="card-menu"></div>
   </div>
+
+  <!-- 全局连接错误浮层（网盘为主界面后，连接失败需全局可见） -->
+  <div id="connOverlay" class="hidden"></div>
 
   <!-- 媒体查看器 -->
   <div id="viewer">
