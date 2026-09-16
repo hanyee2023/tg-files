@@ -127,6 +127,7 @@ const ICONS = {
   users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   volume: '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   mute: '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  reply: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17l-5-5 5-5"/><path d="M4 12h11a5 5 0 0 1 0 10h-3"/></svg>',
 };
 function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function getInitials(name){name=(name||'').trim();if(!name)return'?';const p=name.split(/\s+/);return (p[0]?.[0]||'')+(p[1]?.[0]||'');}
@@ -152,6 +153,9 @@ function setThumbFallback(node,info){
 function fmtTime(ts){if(!ts)return'';const d=new Date(ts*1000);const p=n=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
 function chatName(e){if(!e)return'';if(e.className==='User')return [e.firstName,e.lastName].filter(Boolean).join(' ')||e.username||e.phone||'用户';if(e.className==='Channel'||e.className==='Chat')return e.title||'';return'';}
 function isGroup(e){return e && (e.className==='Channel'||e.className==='Chat');}
+// gramJS 频道字段是蛇形 megagroup（非 megaGroup），务必两者都判断，否则超级群组会被误判为"频道"
+function isChannel(e){return !!(e&&e.className==='Channel');}
+function isBroadcast(e){return !!(e&&e.className==='Channel'&&!(e.megagroup||e.megaGroup));}
 let toastTimer=null;
 function toast(msg){el.toast.textContent=msg;el.toast.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.toast.classList.remove('show'),2200);}
 
@@ -522,22 +526,29 @@ async function openChat(entity){
   el.chatHeader.style.display='flex';el.composer.style.display='flex';
   el.chatTitle.textContent=chatName(entity);
   await loadAvatarInto(el.chatAvatar,entity);
-  el.chatStatus.textContent=isGroup(entity)?(entity.className==='Channel'?(entity.megaGroup?'群组':'频道'):'群组'):'';
+  el.chatStatus.textContent=entity&&entity.className==='User'?'':(isBroadcast(entity)?'频道':'群组');
   el.messages.innerHTML='<div class="loading-spinner"></div>';
   await loadMessages();
   loadDetails(entity);
   document.querySelectorAll('.dialog').forEach(d=>d.classList.toggle('active',String(d.dataset.id)===String(entity.id)));
 }
 async function loadMessages(){
-  try{
+  async function _load(){
     const msgs=await client.getMessages(currentEntity,{limit:40});
     el.messages.innerHTML='';currentMediaList=[];
     for(const m of msgs.reverse())await appendMessage(m,false);
     flushAlbum(false);
     oldestId=msgs.length?msgs[0].id:null;
-    loadingOlder=false;
     el.messages.scrollTop=el.messages.scrollHeight;
-  }catch(e){toast('加载消息失败：'+e.message);}
+  }
+  try{
+    await _load();
+  }catch(e){
+    console.warn('[tg] 首次加载消息失败，1.5s 后重试：',e);
+    try{await new Promise(r=>setTimeout(r,1500));await _load();}
+    catch(e2){el.messages.innerHTML='<div class="empty-hint">加载消息失败：'+(e2&&e2.message?e2.message:e2)+'</div>';toast('加载消息失败：'+(e2&&e2.message?e2.message:e2));}
+  }
+  loadingOlder=false;
 }
 // 向上滚动加载更早的历史消息
 async function loadOlder(){
@@ -545,16 +556,22 @@ async function loadOlder(){
   loadingOlder=true;
   const prevH=el.messages.scrollHeight;
   const prevTop=el.messages.scrollTop;
-  try{
+  const doFetch=async()=>{
     const msgs=await client.getMessages(currentEntity,{limit:40,offsetId:oldestId});
     if(msgs&&msgs.length){
-      for(const m of msgs.reverse())await appendMessage(m,true);
+      // getMessages 返回最新→最旧；预插入需按最新→最旧遍历（insertBefore 首条），顺序才正确
+      for(const m of msgs)await appendMessage(m,true);
       flushAlbum(true);
-      oldestId=msgs[0].id;
-      // 保持滚动位置不跳动
+      oldestId=msgs[msgs.length-1].id;
       el.messages.scrollTop=prevTop+(el.messages.scrollHeight-prevH);
     }
-  }catch(e){toast('加载更早消息失败：'+e.message);}
+  };
+  try{ await doFetch(); }
+  catch(e){
+    console.warn('[tg] 加载更早消息失败，1.5s 后重试：',e);
+    try{ await new Promise(r=>setTimeout(r,1500)); await doFetch(); }
+    catch(e2){ toast('加载更早消息失败：'+(e2&&e2.message?e2.message:e2)); }
+  }
   loadingOlder=false;
 }
 el.messages.addEventListener('scroll',()=>{ if(el.messages.scrollTop<60) loadOlder(); });
@@ -630,7 +647,7 @@ async function renderItem(items, prepend){
   }
   bubble.appendChild(media);
   const acts=document.createElement('div');acts.className='msg-actions';
-  acts.innerHTML=`<button class="act-btn" data-act="view" title="查看">${ICONS.view}</button><button class="act-btn" data-act="download" title="下载">${ICONS.download}</button><button class="act-btn" data-act="share" title="分享">${ICONS.share}</button><button class="act-btn del" data-act="delete" title="删除">${ICONS.del}</button>`;
+  acts.innerHTML=`<button class="act-btn" data-act="view" title="查看">${ICONS.view}</button><button class="act-btn" data-act="reply" title="回复">${ICONS.reply}</button><button class="act-btn" data-act="download" title="下载">${ICONS.download}</button><button class="act-btn" data-act="share" title="分享">${ICONS.share}</button><button class="act-btn del" data-act="delete" title="删除">${ICONS.del}</button>`;
   bubble.appendChild(acts);
   // 参考官方样式：气泡底部 = 浏览量（眼睛图标）+ 时间
   const foot=document.createElement('div');foot.className='msg-foot';
@@ -638,11 +655,6 @@ async function renderItem(items, prepend){
   foot.innerHTML=`${views}<span class="vf-time">${fmtTime(first.date).split(' ')[1]||''}</span>`;
   bubble.appendChild(foot);
   row.appendChild(bubble);
-  // 右下角圆形回复按钮（参考图样式）
-  const fab=document.createElement('button');fab.className='reply-fab';fab.title='回复';
-  fab.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17l-5-5 5-5"/><path d="M4 12h11a5 5 0 0 1 0 10h-3"/></svg>';
-  fab.onclick=(ev)=>{ev.stopPropagation();const n=chatName(currentEntity)||'';el.msgInput.value=`回复 #${first.id} `;el.msgInput.focus();void n;};
-  row.appendChild(fab);
   if(prepend)el.messages.insertBefore(row,el.messages.firstChild);else el.messages.appendChild(row);
 }
 
@@ -655,6 +667,7 @@ el.messages.addEventListener('click',async(e)=>{
     else if(act==='download')downloadMedia(msg);
     else if(act==='share')shareMedia(msg);
     else if(act==='delete')deleteMessage(id);
+    else if(act==='reply'){el.msgInput.value='回复 #'+id+' ';el.msgInput.focus();}
     return;}
   const cell=e.target.closest('.album-cell');
   if(cell){const msg=cell._thumbMsg;const idx=currentMediaList.indexOf(msg);if(idx>=0)openViewer(currentMediaList,idx,'chat',currentEntity);return;}
@@ -829,7 +842,7 @@ function renderViewer(){
   const info=mediaInfo(msg);const key=getMediaKey(viewerEntity,msg,'full');
   const myToken=++viewerToken;                 // 防抖：仅最新一次导航的下载生效，避免左右切换卡顿/串片
   el.viewerVideo.style.display='none';el.viewerMedia.style.display='none';el.viewerCap.textContent='';
-  try{el.viewerVideo.pause();el.viewerVideo.removeAttribute('src');el.viewerVideo.poster='';el.viewerVideo.controls=false;}catch(e){}
+  try{el.viewerVideo.pause();el.viewerVideo.removeAttribute('src');el.viewerVideo.poster='';}catch(e){}
   async function safePlay(v){try{await v.play();}catch(e){
     if(e&&e.name==='NotAllowedError'){v.muted=true;try{await v.play();}catch(_){}}
     else if(e&&e.name!=='AbortError')console.warn('viewer play error',e);
@@ -838,7 +851,7 @@ function renderViewer(){
   const setP=()=>{};
 
   if(info&&(info.type==='video'||info.type==='gif')){
-    el.viewerVideo.style.display='block';
+    el.viewerVideo.style.display='block';el.viewerVideo.controls=true;
     if(mediaCache.has(key)){prog.style.display='none';el.viewerVideo.src=mediaCache.get(key);safePlay(el.viewerVideo);return;}
     const mime=(msg.video&&msg.video.mimeType)||(msg.document&&msg.document.mimeType)||'video/mp4';
     // 先快速拉缩略图作占位，切换时立即可见，不再“等十几秒黑屏”
@@ -943,7 +956,7 @@ async function openMediaBrowser(type){
 async function loadDetails(entity){
   el.detailsPlaceholder.style.display='none';el.detailsContent.classList.add('show');
   el.dName.textContent=chatName(entity);
-  el.dSub.textContent=entity.className==='User'?(entity.username?('@'+entity.username):(entity.phone||'')):(entity.className==='Channel'?(entity.megaGroup?'群组':'频道'):'群组');
+  el.dSub.textContent=entity.className==='User'?(entity.username?('@'+entity.username):(entity.phone||'')):(isBroadcast(entity)?'频道':'群组');
   await loadAvatarInto(el.dAvatar,entity);
   el.dAbout.textContent='加载中…';el.dStat.innerHTML='';
   let members=0;
@@ -1019,7 +1032,7 @@ function renderMediaStats(done){
 el.btnChatMenu.onclick=(ev)=>{
   if(!currentEntity)return;const m=el.chatMenu;m.innerHTML='';
   if(isGroup(currentEntity)){
-    if(currentEntity.className==='Channel'&&!currentEntity.megaGroup){const b=document.createElement('button');b.textContent=currentEntity.left?'加入频道':'退出频道';b.onclick=()=>{currentEntity.left?joinChannel(currentEntity):leaveChannel(currentEntity);hideMenu();};m.appendChild(b);}
+    if(isBroadcast(currentEntity)){const b=document.createElement('button');b.textContent=currentEntity.left?'加入频道':'退出频道';b.onclick=()=>{currentEntity.left?joinChannel(currentEntity):leaveChannel(currentEntity);hideMenu();};m.appendChild(b);}
     else{const b=document.createElement('button');b.textContent='退出群组';b.className='danger';b.onclick=()=>{leaveChannel(currentEntity);hideMenu();};m.appendChild(b);}
   }else{const b=document.createElement('button');b.textContent='删除对话';b.className='danger';b.onclick=()=>{deleteChat(currentEntity);hideMenu();};m.appendChild(b);}
   const b2=document.createElement('button');b2.textContent='查看详情';b2.onclick=()=>{hideMenu();openDetailsMobile();};m.appendChild(b2);
