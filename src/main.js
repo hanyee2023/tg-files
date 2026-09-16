@@ -628,12 +628,17 @@ async function renderItem(items, prepend){
   const startIdx=currentMediaList.length;
   if(prepend){ for(let i=items.length-1;i>=0;i--)currentMediaList.unshift(items[i]); }
   else { for(const m of items)currentMediaList.push(m); }
-  const media=document.createElement('div');media.className='msg-media'+(items.length>1?' album':'');
-  if(items.length===1){
-    const msg=items[0];const info=mediaInfo(msg);
-    const key=currentEntity.id+':'+msg.id;
-    media._thumbMsg=msg;media._cacheKey=key;
-    if(info.type==='image'||info.type==='video'||info.type==='gif'){
+  // 纯文字消息 mediaInfo 返回 null，必须判空：否则下方 info.type 会抛 TypeError，
+  // 被 loadMessages 的单条 try/catch 吞掉 → 整条文字消息被静默跳过
+  const info0=items.length===1?mediaInfo(items[0]):null;
+  const hasMedia=items.length>1||info0!=null;
+  if(hasMedia){
+    const media=document.createElement('div');media.className='msg-media'+(items.length>1?' album':'');
+    if(items.length===1){
+      const msg=items[0];const info=info0;
+      const key=currentEntity.id+':'+msg.id;
+      media._thumbMsg=msg;media._cacheKey=key;
+      if(info&&(info.type==='image'||info.type==='video'||info.type==='gif')){
       const ph=document.createElement('div');ph.className='lazy-ph';media.appendChild(ph);
       if(info.type==='video'){
         const vb=document.createElement('div');vb.className='vbtn';
@@ -659,6 +664,7 @@ async function renderItem(items, prepend){
     }
   }
   bubble.appendChild(media);
+  }
   const acts=document.createElement('div');acts.className='msg-actions';
   acts.innerHTML=`<button class="act-btn" data-act="view" title="查看">${ICONS.view}</button><button class="act-btn" data-act="reply" title="回复">${ICONS.reply}</button><button class="act-btn" data-act="download" title="下载">${ICONS.download}</button><button class="act-btn" data-act="share" title="分享">${ICONS.share}</button><button class="act-btn del" data-act="delete" title="删除">${ICONS.del}</button>`;
   bubble.appendChild(acts);
