@@ -4,47 +4,59 @@ import { PromisedWebSockets } from 'telegram/extensions/PromisedWebSockets';
 import { CustomFile } from 'telegram/client/uploads';
 import { NewMessage } from 'telegram/events';
 
+// ===== 安全存储兜底（必须在所有 localStorage 访问之前）=====
+// 部分手机浏览器/WebView（隐私模式、拦截 Cookie、国内"极速"内核）访问 localStorage 会直接抛
+// SecurityError；一旦在模块顶层抛出，整个应用都不会运行（屏显表现为 build=undefined）。
+// 这里统一兜底：读不到→内存，写不进→内存，绝不在顶层抛错。
+const _memStore={};
+function sGet(k){ try{ const v=window.localStorage.getItem(k); if(v!==null&&v!==undefined)return v; }catch(e){} return (k in _memStore)?_memStore[k]:null; }
+function sSet(k,v){ try{ window.localStorage.setItem(k,String(v)); }catch(e){} _memStore[k]=String(v); }
+function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} delete _memStore[k]; }
+
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.16.11';
-console.log('[tg] build', BUILD, '· 移动端登录修复(WS arraybuffer + 重连守卫) + 屏显错误栈诊断');
-// 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage
-// 这样即便直接上传未带密钥的 dist，也能在页面里填一次 API_ID/HASH/代理，免去反复重新打包
+const BUILD='v2026.09.16.12';
+console.log('[tg] build', BUILD, '· 移动端顶层防崩(安全存储兜底) + 页内API配置表单 + 缓存防串');
+// 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
+// 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
 function _readCfg(){
   const env=import.meta.env||{};
   const w=(typeof window!=='undefined'&&window.__TG_CONFIG)||{};
-  const ls=(typeof localStorage!=='undefined')?{a:localStorage.getItem('tg_api_id'),h:localStorage.getItem('tg_api_hash'),p:localStorage.getItem('tg_proxy')}:{};
   return {
-    apiId: env.VITE_API_ID||w.apiId||ls.a||'',
-    apiHash: env.VITE_API_HASH||w.apiHash||ls.h||'',
-    proxy: env.VITE_PROXY_DOMAIN||w.proxy||ls.p||'',
+    apiId: env.VITE_API_ID||w.apiId||sGet('tg_api_id')||'',
+    apiHash: env.VITE_API_HASH||w.apiHash||sGet('tg_api_hash')||'',
+    proxy: env.VITE_PROXY_DOMAIN||w.proxy||sGet('tg_proxy')||'',
   };
 }
 const _cfg=_readCfg();
-const API_ID = parseInt(_cfg.apiId || '0');
-const API_HASH = _cfg.apiHash || '';
-const PROXY_DOMAIN = _cfg.proxy || '';
+const API_ID = parseInt(_cfg.apiId||'0',10)||0;
+const API_HASH = _cfg.apiHash||'';
+const PROXY_DOMAIN = _cfg.proxy||'';
 // 暴露配置状态到全局，供页面上的“屏显诊断”读取（无需 F12）
 window.__CFG={build:BUILD, api:!!API_ID, hash:!!API_HASH, proxy:PROXY_DOMAIN||'(未设置)'};
-// 点击左下角版本号可临时填写/修改 API_ID、API_HASH、代理域名（存 localStorage，无需重新打包）
-function openConfig(){
+// 打开/关闭登录卡片内的 API 配置表单（不用 prompt()——部分手机 WebView 会拦截）
+function openConfig(force){
   try{
-    const a=prompt('API_ID（数字，留空则用构建期环境变量）',_cfg.apiId||''); if(a===null)return;
-    const h=prompt('API_HASH（字符串）',_cfg.apiHash||''); if(h===null)return;
-    const p=prompt('代理域名（如 web.cutup.de5.net，留空则用环境变量）',_cfg.proxy||'');
-    localStorage.setItem('tg_api_id',a.trim()); localStorage.setItem('tg_api_hash',h.trim()); localStorage.setItem('tg_proxy',p.trim());
-    alert('已保存，正在重新加载…'); location.reload();
+    const box=document.getElementById('apiCfg'); if(!box)return;
+    const want=(force===undefined)?box.classList.contains('hidden'):!!force;
+    box.classList.toggle('hidden',!want);
+    if(want){
+      const a=document.getElementById('cfgApiId'),h=document.getElementById('cfgApiHash'),p=document.getElementById('cfgProxy');
+      if(a)a.value=sGet('tg_api_id')||_cfg.apiId||'';
+      if(h)h.value=sGet('tg_api_hash')||_cfg.apiHash||'';
+      if(p)p.value=sGet('tg_proxy')||_cfg.proxy||'';
+    }
   }catch(e){}
 }
-// 创建左下角可点击版本号（显示构建版本 + 配置状态），点击打开配置
-(function(){
+// 左下角可点击版本号（构建版本 + 配置状态），点击展开配置表单
+try{
   let t=document.getElementById('buildTag');
   if(!t){ t=document.createElement('div'); t.id='buildTag'; document.body.appendChild(t); }
   t.style.pointerEvents='auto'; t.style.cursor='pointer';
-  const cfg=window.__CFG||{};
-  t.textContent='build '+cfg.build+' · API:'+(cfg.api?'✓':'✗')+' 代理:'+(cfg.proxy&&cfg.proxy!=='(未设置)'?cfg.proxy.slice(0,18):'未设');
-  t.onclick=openConfig;
-})();
+  const _c=window.__CFG;
+  t.textContent='build '+_c.build+' · API:'+(_c.api?'✓':'✗')+' 代理:'+(_c.proxy!=='(未设置)'?_c.proxy.slice(0,18):'未设');
+  t.onclick=function(){openConfig();};
+}catch(e){}
 
 // ===== 代理：重写 GramJS 内部 WebSocket 地址 =====
 class ProxiedWebSockets extends PromisedWebSockets {
@@ -307,13 +319,13 @@ function displayName(msg){
 }
 
 // ===== 主题 =====
-function applyTheme(){const t=localStorage.getItem('tg_theme')||'light';const a=localStorage.getItem('tg_accent')||'blue';document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-accent',a);
+function applyTheme(){const t=sGet('tg_theme')||'light';const a=sGet('tg_accent')||'blue';document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-accent',a);
   el.segTheme.querySelectorAll('button').forEach(b=>b.classList.toggle('sel',b.dataset.v===t));
   el.segAccent.querySelectorAll('button').forEach(b=>b.classList.toggle('sel',b.dataset.v===a));}
 
 // ===== 自定义聊天背景 =====
 function applyChatBg(){
-  const raw=localStorage.getItem('tg_chat_bg');
+  const raw=sGet('tg_chat_bg');
   const chat=document.getElementById('chat');
   chat.style.backgroundImage='var(--tg-chat-pattern)';chat.style.backgroundSize='';
   if(!raw){chat.style.background='';return;}
@@ -413,23 +425,32 @@ async function init(){
   setupDetailsClose();
   setupLogin();
   setupChatSearch();
-  // 屏幕可见版本号：手机上不用 F12 也能确认部署是否更新（左下角小字）
-  // 屏幕可见诊断：手机端不用 F12 也能确认版本 + API/代理是否配好；点一下复制全文
+  // 页内 API 配置表单：保存按钮（登录卡片里，缺配置时自动展开，也可点左下角版本号展开）
   try{
-    const bt=document.createElement('div');bt.id='buildTag';bt.title='点击复制诊断信息';
-    const upd=()=>{const c=window.__CFG||{};bt.textContent='['+(c.build||'?')+'] API:'+(c.api?'✓':'✗')+' 代理:'+c.proxy;};
-    upd();setTimeout(upd,1500);
-    bt.onclick=()=>{try{navigator.clipboard.writeText(bt.textContent);}catch(e){}};
-    document.body.appendChild(bt);
+    const sb=document.getElementById('cfgSave');
+    if(sb&&!sb.dataset.bound){
+      sb.dataset.bound='1';
+      sb.onclick=()=>{
+        const a=((document.getElementById('cfgApiId')||{}).value||'').trim();
+        const h=((document.getElementById('cfgApiHash')||{}).value||'').trim();
+        const p=((document.getElementById('cfgProxy')||{}).value||'').trim();
+        if(!/^\d+$/.test(a)){toast('API_ID 必须是纯数字');return;}
+        if(!h){toast('API_HASH 不能为空');return;}
+        sSet('tg_api_id',a);sSet('tg_api_hash',h);sSet('tg_proxy',p);
+        toast('已保存，正在刷新…');setTimeout(()=>location.reload(),600);
+      };
+    }
   }catch(e){}
-  const sessionStr=localStorage.getItem('tg_session')||'';
+  const sessionStr=sGet('tg_session')||'';
   if(!API_ID || !API_HASH){
-    const ov=document.getElementById('connOverlay');
-    if(ov){ov.innerHTML='<div class="box"><b>缺少 API 配置</b><br>请在 Cloudflare Pages 的环境变量中设置 <code>VITE_API_ID</code>、<code>VITE_API_HASH</code>、<code>VITE_PROXY_DOMAIN</code>，然后重新部署。</div>';ov.classList.remove('hidden');}
-    toast('缺少 API 配置'); return;
+    // 缺配置：展示登录卡片 + 自动展开配置表单（不再用 connOverlay 遮罩，手机上更直观）
+    showLogin();
+    openConfig(true);
+    el.loginErr && (el.loginErr.textContent='请先填写 API_ID / API_HASH（点左下角版本号也可展开）');
+    return;
   }
   createClient(sessionStr);
-  const saved=localStorage.getItem('tg_self');
+  const saved=sGet('tg_self');
   if(saved){try{selfMe=JSON.parse(saved);showAccount(selfMe);}catch(e){}}
   if(!sessionStr||sessionStr.length<20){
     showLogin();   // 未登录 → 显示登录页（主页被覆盖）；有登录记录则自动进入主页
@@ -480,7 +501,7 @@ async function tryConnect(){
     if(connAttempt<3){
       setConn('error',e.message);
       toast('连接失败，3 秒后自动重试（第 '+connAttempt+'/3 次）');
-      setTimeout(async()=>{try{await Promise.race([client.disconnect(),new Promise(r=>setTimeout(r,3000))]);}catch(_){/**/}createClient(localStorage.getItem('tg_session')||'');tryConnect();},3000);
+      setTimeout(async()=>{try{await Promise.race([client.disconnect(),new Promise(r=>setTimeout(r,3000))]);}catch(_){/**/}createClient(sGet('tg_session')||'');tryConnect();},3000);
     }else{
       // 把完整错误（消息 + 堆栈）打到屏显诊断面板，手机端无 F12 也能看到根因
       showConnectDiag(e);
@@ -509,7 +530,7 @@ function showConnectDiag(e){
   const cp=document.getElementById('__diagCopy');
   if(cp)cp.onclick=()=>{try{navigator.clipboard.writeText(d.innerText);toast('已复制');}catch(_){}};
   const rt=document.getElementById('__diagRetry');
-  if(rt)rt.onclick=()=>{connAttempt=0;createClient(localStorage.getItem('tg_session')||'');tryConnect();};
+  if(rt)rt.onclick=()=>{connAttempt=0;createClient(sGet('tg_session')||'');tryConnect();};
 }
 function showConnFail(reason){
   setConn('error',reason.length>40?reason.slice(0,40)+'…':reason);
@@ -537,8 +558,8 @@ function setConn(state,msg){
   else chip.style.opacity='1';
 }
 function finishLogin(me,silent){
-  localStorage.setItem('tg_session',client.session.save());
-  try{localStorage.setItem('tg_self',JSON.stringify({id:me.id,firstName:me.firstName,lastName:me.lastName,username:me.username,phone:me.phone}));}catch(e){}
+  sSet('tg_session',client.session.save());
+  try{sSet('tg_self',JSON.stringify({id:me.id,firstName:me.firstName,lastName:me.lastName,username:me.username,phone:me.phone}));}catch(e){}
   selfMe=me;setConn('ok');showAccount(me);loadDialogs();
 }
 function showAccount(me){
@@ -1245,26 +1266,26 @@ async function deleteChat(entity){if(!confirm('确定删除该对话？'))return
 // ===== 设置面板（左侧）=====
 el.btnMenu.onclick=()=>el.settings.classList.add('open');
 el.btnSettingsClose.onclick=()=>el.settings.classList.remove('open');
-el.segTheme.querySelectorAll('button').forEach(b=>b.onclick=()=>{localStorage.setItem('tg_theme',b.dataset.v);applyTheme();});
-el.segAccent.querySelectorAll('button').forEach(b=>b.onclick=()=>{localStorage.setItem('tg_accent',b.dataset.v);applyTheme();});
-document.querySelectorAll('.bg-swatch').forEach(s=>s.onclick=()=>{localStorage.setItem('tg_chat_bg',JSON.stringify({type:'color',value:s.dataset.bg}));applyChatBg();});
+el.segTheme.querySelectorAll('button').forEach(b=>b.onclick=()=>{sSet('tg_theme',b.dataset.v);applyTheme();});
+el.segAccent.querySelectorAll('button').forEach(b=>b.onclick=()=>{sSet('tg_accent',b.dataset.v);applyTheme();});
+document.querySelectorAll('.bg-swatch').forEach(s=>s.onclick=()=>{sSet('tg_chat_bg',JSON.stringify({type:'color',value:s.dataset.bg}));applyChatBg();});
 el.btnBgImage.onclick=()=>el.bgFileInput.click();
-el.bgFileInput.onchange=async(e)=>{const f=e.target.files[0];if(!f)return;const url=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(f);});localStorage.setItem('tg_chat_bg',JSON.stringify({type:'image',value:url}));applyChatBg();e.target.value='';};
-el.btnBgReset.onclick=()=>{localStorage.removeItem('tg_chat_bg');applyChatBg();};
-el.btnLogout.onclick=()=>{if(confirm('退出登录将清除本地登录态')){localStorage.removeItem('tg_session');localStorage.removeItem('tg_self');location.reload();}};
+el.bgFileInput.onchange=async(e)=>{const f=e.target.files[0];if(!f)return;const url=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(f);});sSet('tg_chat_bg',JSON.stringify({type:'image',value:url}));applyChatBg();e.target.value='';};
+el.btnBgReset.onclick=()=>{sDel('tg_chat_bg');applyChatBg();};
+el.btnLogout.onclick=()=>{if(confirm('退出登录将清除本地登录态')){sDel('tg_session');sDel('tg_self');location.reload();}};
 
 // ===== 网盘（全屏）=====
 function fillNetdiskSelect(){
-  const saved=localStorage.getItem('tg_netdisk')||'';
+  const saved=sGet('tg_netdisk')||'';
   el.netdiskSelect.innerHTML='<option value="">— 请选择频道 —</option>';
   for(const d of currentDialogs){if(d.entity.className==='Channel'){const o=document.createElement('option');o.value=String(d.id);o.textContent=chatName(d.entity);el.netdiskSelect.appendChild(o);}}
   if(saved)el.netdiskSelect.value=saved;
 }
 el.btnEnterNetdisk.onclick=()=>{
-  let id=el.netdiskSelect.value||localStorage.getItem('tg_netdisk');
+  let id=el.netdiskSelect.value||sGet('tg_netdisk');
   if(!id){toast('请先在上方选择网盘频道');return;}
   const ent=currentDialogs.find(d=>String(d.id)===id)?.entity;if(!ent){toast('未找到该频道');return;}
-  netdiskChannel=ent;localStorage.setItem('tg_netdisk',id);
+  netdiskChannel=ent;sSet('tg_netdisk',id);
   el.settings.classList.remove('open');
   el.netdisk.classList.add('open');
   loadNetdisk(el.netdiskTabs.querySelector('.sel').dataset.cat);
