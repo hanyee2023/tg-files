@@ -380,6 +380,8 @@
   .cs-name{font-size:13px;font-weight:600;color:var(--tg-text);}
   .cs-prev{font-size:13px;color:var(--tg-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
   .cs-empty{color:var(--tg-sub);font-size:14px;text-align:center;padding:30px;}
+  /* 屏显版本号：用于在手机上直接确认部署版本（无需 F12） */
+  #buildTag{position:fixed;left:8px;bottom:4px;font-size:10px;color:var(--tg-sub);opacity:.6;z-index:9999;pointer-events:none;font-variant-numeric:tabular-nums;}
 </style>
 </head>
 <body>
