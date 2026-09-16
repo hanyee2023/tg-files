@@ -439,6 +439,14 @@
       var src=(t&&t.src)||(t&&t.href)||(e&&e.filename)||'';
       // Cloudflare Pages 自动注入的 analytics 脚本加载失败，不是应用代码问题，忽略
       if(src.includes('cloudflareinsights.com')){console.warn('[ignore] cloudflareinsights error');return;}
+      // 跨域脚本错误会被浏览器统一脱敏成 "Script error."（无文件名/无堆栈/无详情）。
+      // 应用自身是同源脚本，出错会带完整类型/消息/堆栈；只有第三方注入脚本（如 Cloudflare
+      // 统计脚本、手机浏览器自带的云加速/翻译注入）才会这样。与应用无关，忽略以免误导。
+      var em=(e&&e.message)||'';
+      if((em==='Script error.'||em==='Script error')&&!e.error&&!e.filename&&!e.lineno){
+        console.warn('[ignore] 跨域脚本脱敏错误（Script error.，来自第三方注入脚本，与应用无关）');
+        return;
+      }
       // 媒体元素(video/audio/img)的加载/解码错误：流式播放中部分片段解码失败、换源瞬间等都属预期，
       // 会自动降级/恢复（如等待完整数据后重播），不是应用崩溃，不打红条
       if(t&&(t.tagName==='VIDEO'||t.tagName==='AUDIO'||t.tagName==='SOURCE'||t.tagName==='IMG')){
