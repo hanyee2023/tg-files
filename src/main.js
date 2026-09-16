@@ -16,9 +16,13 @@ class ProxiedWebSockets extends PromisedWebSockets {
     if (PROXY_DOMAIN) {
       // https 页面用 wss，http（本地调试）用 ws
       const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-      return `${scheme}://${PROXY_DOMAIN}/${ip}${path}`;
+      const url = `${scheme}://${PROXY_DOMAIN}/${ip}${path}`;
+      console.info('[tg] WebSocket →', url);
+      return url;
     }
-    return super.getWebSocketLink(ip, port, testServers);
+    const direct = super.getWebSocketLink(ip, port, testServers);
+    console.warn('[tg] WebSocket 直连（未走代理）→', direct, '—— 国内环境大概率连接超时！');
+    return direct;
   }
 }
 if (!PROXY_DOMAIN) console.warn('[tg] 未设置 VITE_PROXY_DOMAIN，将直连 Telegram（国内大概率失败）。');
@@ -291,21 +295,70 @@ async function init(){
     el.messages.innerHTML='<div class="empty-hint">未配置 API_ID / API_HASH。请在 Cloudflare Pages 的环境变量中设置 VITE_API_ID、VITE_API_HASH、VITE_PROXY_DOMAIN，然后重新部署。</div>';
     toast('缺少 API 配置'); return;
   }
-  client=new TelegramClient(new StringSession(sessionStr),API_ID,API_HASH,{connectionRetries:5,retryDelay:2000,useWSS:true,networkSocket:ProxiedWebSockets});
-  client.addEventHandler(onNewMessage,new NewMessage({}));
+  createClient(sessionStr);
   const saved=localStorage.getItem('tg_self');
   if(saved){try{selfMe=JSON.parse(saved);showAccount(selfMe);}catch(e){}}
   if(!sessionStr||sessionStr.length<20){
     showLogin();   // 未登录 → 显示登录页（主页被覆盖）；有登录记录则自动进入主页
     return;
   }
+  tryConnect();
+}
+let connAttempt=0;
+function createClient(sessionStr){
+  client=new TelegramClient(new StringSession(sessionStr),API_ID,API_HASH,{connectionRetries:3,retryDelay:1500,useWSS:true,networkSocket:ProxiedWebSockets,requestRetries:2});
+  client.addEventHandler(onNewMessage,new NewMessage({}));
+}
+// 连接前探测代理域名是否可达（no-cors opaque 请求，可达即 resolve）
+async function probeProxy(){
+  if(!PROXY_DOMAIN)return 'DIRECT';
   try{
-    setConn('connecting');
-    await client.connect();
+    const c=new AbortController();const t=setTimeout(()=>c.abort(),6000);
+    await fetch('https://'+PROXY_DOMAIN+'/',{mode:'no-cors',signal:c.signal,cache:'no-store'});
+    clearTimeout(t);return 'OK';
+  }catch(e){return 'FAIL';}
+}
+// 带超时/重试/诊断的连接：把"永远连接中"变成 15 秒内给出明确结论
+async function tryConnect(){
+  connAttempt++;
+  setConn('connecting');
+  const probe=await probeProxy();
+  if(probe==='FAIL'){
+    showConnFail('代理域名 '+PROXY_DOMAIN+' 无法访问（6 秒内无响应）。请检查该 Worker 是否在线、域名 DNS 是否生效。');
+    return;
+  }
+  if(probe==='DIRECT'){
+    showConnFail('构建产物中缺少 VITE_PROXY_DOMAIN，前端正在直连 Telegram（国内会被墙黑洞，永远卡住）。请用源码 + Cloudflare Pages 环境变量（VITE_API_ID / VITE_API_HASH / VITE_PROXY_DOMAIN=tele.reader.cc.cd）重新构建部署，不要上传未带环境变量编译的 dist。');
+    return;
+  }
+  const t0=Date.now();
+  try{
+    await Promise.race([
+      client.connect(),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('连接超时（15 秒内 Worker 未回包，握手卡住）')),15000)),
+    ]);
     const me=await client.getMe();
     finishLogin(me);
+  }catch(e){
+    console.error('[tg] 连接失败（'+((Date.now()-t0)/1000).toFixed(1)+'s）：',e);
+    if(connAttempt<3){
+      setConn('error',e.message);
+      toast('连接失败，3 秒后自动重试（第 '+connAttempt+'/3 次）');
+      setTimeout(async()=>{try{await Promise.race([client.disconnect(),new Promise(r=>setTimeout(r,3000))]);}catch(_){/**/}createClient(localStorage.getItem('tg_session')||'');tryConnect();},3000);
+    }else{
+      showConnFail('已重试 3 次仍失败：'+(e&&e.message?e.message:e)+'。控制台（F12）中 [tg] 开头的日志会显示实际使用的 WebSocket 地址，请核对是否为 wss://tele.reader.cc.cd/…');
+    }
   }
-  catch(e){setConn('error',e.message);toast('连接失败：'+e.message);el.messages.innerHTML='<div class="empty-hint">连接失败：'+(e&&e.message?e.message:'未知')+'</div>';}
+}
+function showConnFail(reason){
+  setConn('error',reason.length>40?reason.slice(0,40)+'…':reason);
+  el.messages.innerHTML='<div class="empty-hint" style="text-align:left;max-width:520px;margin:0 auto;line-height:1.9;">'
+    +'<b style="color:#e53935;">连接 Telegram 失败</b><br>'+reason
+    +'<br><br><b>自查清单：</b>'
+    +'<br>1. F12 控制台搜索 <code>[tg]</code>，确认 WebSocket 地址是否为 <code>wss://tele.reader.cc.cd/…/apiws</code>'
+    +'<br>2. 若显示「直连」：说明本次构建没带 <code>VITE_PROXY_DOMAIN</code>，需在 Cloudflare Pages 环境变量中补齐后重新部署'
+    +'<br>3. 若代理地址正确仍失败：浏览器直接打开 <code>https://tele.reader.cc.cd/</code> 确认 Worker 在线'
+    +'<br><br><button class="btn primary" onclick="location.reload()">重新连接</button></div>';
 }
 // 连接状态指示（右上角固定小圆点，避免"空白但不知道卡在哪"）
 function setConn(state,msg){
@@ -345,7 +398,10 @@ function setupLogin(){
     el.loginErr.textContent='连接中…';
     try{
       setConn('connecting');
-      await client.connect();
+      await Promise.race([
+        client.connect(),
+        new Promise((_,rej)=>setTimeout(()=>rej(new Error('连接超时（15 秒）')),15000)),
+      ]);
       const sent=await client.sendCode({apiId:API_ID,apiHash:API_HASH,phoneNumber:phone});
       loginPhoneCodeHash=sent.phoneCodeHash;
       el.loginStepPhone.style.display='none';
