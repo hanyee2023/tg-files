@@ -15,8 +15,8 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} delete _me
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.16.12';
-console.log('[tg] build', BUILD, '· 移动端顶层防崩(安全存储兜底) + 页内API配置表单 + 缓存防串');
+const BUILD='v2026.09.16.13';
+console.log('[tg] build', BUILD, '· 移动端顶层防崩(安全存储兜底) + 页内API配置表单 + 忽略第三方脱敏错误');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
 function _readCfg(){
