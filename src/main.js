@@ -85,12 +85,19 @@ let lastFocusVideo = null;      // 当前正在播放/加载的视频消息，�
 // ===== 视频下载串行化（同一时间只下载一条视频，集中带宽给正在播放的那条）=====
 let _dlRunning = false;
 const _dlQueue = [];
-function enqueueDownload(task){
+// priority: 2=正在播放（最优先） 1=普通 0=预取（最低，让路给播放）
+function enqueueDownload(task,priority=1){
   return new Promise((resolve,reject)=>{
-    _dlQueue.push({task,resolve,reject});
+    _dlQueue.push({task,resolve,reject,priority});
+    _dlQueue.sort((a,b)=>b.priority-a.priority);   // 高优先级插队，正在播放的视频永远先下
     _pumpDownloads();
   });
 }
+// 全局：同一时间只允许一个视频发声（新视频开播自动暂停其它视频，避免多音源混播）
+document.addEventListener('play',e=>{
+  const t=e.target;
+  if(t&&t.tagName==='VIDEO'){document.querySelectorAll('video').forEach(v=>{if(v!==t&&!v.paused)v.pause();});}
+},true);
 function _pumpDownloads(){
   if(_dlRunning)return;
   if(!_dlQueue.length)return;
@@ -163,12 +170,13 @@ function mediaInfo(msg){
 function netdiskCategory(msg){
   const info=mediaInfo(msg); if(!info)return null;
   if(info.type==='video')return 'video';
-  if(info.type==='image')return 'image';
-  if(info.type==='gif')return 'gif';
+  if(info.type==='image'||info.type==='gif')return 'image';   // GIF 归入图片（GIF 分类已移除）
   if(info.type==='audio')return 'audio';
   const ext=(info.name.split('.').pop()||'').toLowerCase();
-  if(['apk','ipa','exe','dmg','deb','rpm','msi','app','xapk'].includes(ext))return 'software';
-  return 'document';
+  const docExts=['pdf','doc','docx','xls','xlsx','ppt','pptx','txt','md','csv','epub','pages','numbers','key'];
+  const fileExts=['apk','ipa','exe','dmg','deb','rpm','msi','app','xapk','zip','rar','7z','tar','gz','iso','bin'];
+  if(docExts.includes(ext))return 'document';
+  return 'file';   // 其余（含安装包/压缩包/未知类型）归入文件
 }
 
 // ===== 主题 =====
@@ -499,9 +507,11 @@ el.messages.addEventListener('scroll',()=>{ if(el.messages.scrollTop<60) loadOld
 // 一条消息含多条媒体（相册）时合并为一张拼图卡
 let pendingAlbum=null;
 async function appendMessage(msg, prepend){
-  if(msg.groupedId!=null){
-    if(pendingAlbum && pendingAlbum.id===msg.groupedId) pendingAlbum.msgs.push(msg);
-    else { flushAlbum(prepend); pendingAlbum={id:msg.groupedId, msgs:[msg]}; }
+  // 关键：gramJS 的 groupedId 是 Long 对象，必须转字符串比较，否则永远不相等 → 相册被拆成多卡
+  const gid=msg.groupedId!=null?String(msg.groupedId):null;
+  if(gid){
+    if(pendingAlbum && pendingAlbum.id===gid) pendingAlbum.msgs.push(msg);
+    else { flushAlbum(prepend); pendingAlbum={id:gid, msgs:[msg]}; }
   }else{
     flushAlbum(prepend);
     await renderItem([msg], prepend);
@@ -566,8 +576,17 @@ async function renderItem(items, prepend){
   const acts=document.createElement('div');acts.className='msg-actions';
   acts.innerHTML=`<button class="act-btn" data-act="view" title="查看">${ICONS.view}</button><button class="act-btn" data-act="download" title="下载">${ICONS.download}</button><button class="act-btn" data-act="share" title="分享">${ICONS.share}</button><button class="act-btn del" data-act="delete" title="删除">${ICONS.del}</button>`;
   bubble.appendChild(acts);
-  const mt=document.createElement('div');mt.className='mt';mt.textContent=fmtTime(first.date).split(' ')[1]||'';bubble.appendChild(mt);
+  // 参考官方样式：气泡底部 = 浏览量（眼睛图标）+ 时间
+  const foot=document.createElement('div');foot.className='msg-foot';
+  const views=(first.views!=null&&first.views>0)?`<span class="vf-views"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>${first.views>=1000?(first.views/1000).toFixed(1)+'K':first.views}</span>`:'';
+  foot.innerHTML=`${views}<span class="vf-time">${fmtTime(first.date).split(' ')[1]||''}</span>`;
+  bubble.appendChild(foot);
   row.appendChild(bubble);
+  // 右下角圆形回复按钮（参考图样式）
+  const fab=document.createElement('button');fab.className='reply-fab';fab.title='回复';
+  fab.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17l-5-5 5-5"/><path d="M4 12h11a5 5 0 0 1 0 10h-3"/></svg>';
+  fab.onclick=(ev)=>{ev.stopPropagation();const n=chatName(currentEntity)||'';el.msgInput.value=`回复 #${first.id} `;el.msgInput.focus();void n;};
+  row.appendChild(fab);
   if(prepend)el.messages.insertBefore(row,el.messages.firstChild);else el.messages.appendChild(row);
 }
 
@@ -611,16 +630,12 @@ async function playVideo(host,msg,entity){
   playBtn.innerHTML=`<span class="vp-icon">▶</span><span class="vp-ring"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="3"/><circle class="vp-ring-cp cp" cx="18" cy="18" r="15" fill="none" stroke-width="3" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg></span>`;
   left.appendChild(playBtn);
 
-  const infoBox=document.createElement('div');infoBox.className='vp-info';
-  const nameSpan=document.createElement('div');nameSpan.className='vp-name';nameSpan.textContent=info?info.name:'';
-  const timeSpan=document.createElement('span');timeSpan.className='vp-time';timeSpan.textContent='0:00';
-  infoBox.append(nameSpan,timeSpan);
-
   const right=document.createElement('div');right.className='vp-right';
+  const timeSpan=document.createElement('span');timeSpan.className='vp-time';timeSpan.textContent='0:00';
   const muteBtn=document.createElement('button');muteBtn.className='vp-mute';muteBtn.innerHTML=ICONS.mute; // 初始静音
-  right.appendChild(muteBtn);
+  right.append(timeSpan,muteBtn);
 
-  ctrl.append(left,infoBox,right);wrap.appendChild(ctrl);host.appendChild(wrap);
+  ctrl.append(left,right);wrap.appendChild(ctrl);host.appendChild(wrap);
 
   const cp=playBtn.querySelector('.vp-ring-cp');
   const icon=playBtn.querySelector('.vp-icon');
@@ -630,7 +645,11 @@ async function playVideo(host,msg,entity){
   function fmtDur(s){if(!s||!isFinite(s))return '0:00';const m=Math.floor(s/60);const sec=Math.floor(s%60);return m+':'+String(sec).padStart(2,'0');}
   function updateTime(){timeSpan.textContent='-'+fmtDur(Math.max(0,(v.duration||0)-v.currentTime));}
   function syncIcon(){icon.textContent=v.paused?'▶':'⏸';}
-  async function safePlay(){try{await v.play();}catch(e){if(e&&e.name!=='AbortError')console.warn('play error',e);}}
+  async function safePlay(){try{await v.play();}catch(e){
+    // 浏览器拒绝有声自动播放时，静音后重试，保证"进度走完即开播"
+    if(e&&e.name==='NotAllowedError'){v.muted=true;muteBtn.innerHTML=ICONS.mute;try{await v.play();}catch(_){}}
+    else if(e&&e.name!=='AbortError')console.warn('play error',e);
+  }}
 
   playBtn.onclick=(e)=>{e.stopPropagation();if(v.paused){safePlay();}else{v.pause();}};
   muteBtn.onclick=(e)=>{e.stopPropagation();v.muted=!v.muted;muteBtn.innerHTML=v.muted?ICONS.mute:ICONS.volume;};
@@ -644,7 +663,7 @@ async function playVideo(host,msg,entity){
   }
   try{
     // 串行化下载：正在播放本条时，其它视频下载排队等待，集中流量给本条
-    const buf=await enqueueDownload(()=>client.downloadMedia(msg,{progressCallback:p=>{if(lastFocusVideo===msg)setLoadProgress(p);}}));
+    const buf=await enqueueDownload(()=>client.downloadMedia(msg,{progressCallback:p=>{if(lastFocusVideo===msg)setLoadProgress(p);}}),2);
     if(lastFocusVideo!==msg)return; // 已切走，丢弃
     if(!buf||!buf.length){host.innerHTML='❌ 播放失败';return;}
     const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
@@ -741,7 +760,8 @@ function prefetchAround(){
     if(mediaCache.has(k))continue;
     const i=mediaInfo(d);
     if(i&&(i.type==='video'||i.type==='gif'||i.type==='image')){
-      enqueueDownload(()=>client.downloadMedia(d)).then(buf=>{
+      // priority 0：预取任务让路给正在播放/观看的媒体
+      enqueueDownload(()=>client.downloadMedia(d),0).then(buf=>{
         if(buf&&buf.length)mediaCache.set(k,URL.createObjectURL(new Blob([buf],{type:i.type==='image'?'image/jpeg':mimeFor(d)})));
       }).catch(()=>{});
     }
@@ -753,8 +773,11 @@ function renderViewer(){
   const info=mediaInfo(msg);const key=getMediaKey(viewerEntity,msg,'full');
   const myToken=++viewerToken;                 // 防抖：仅最新一次导航的下载生效，避免左右切换卡顿/串片
   el.viewerVideo.style.display='none';el.viewerMedia.style.display='none';el.viewerCap.textContent='';
-  try{el.viewerVideo.pause();el.viewerVideo.removeAttribute('src');el.viewerVideo.poster='';}catch(e){}
-  async function safePlay(v){try{await v.play();}catch(e){if(e&&e.name!=='AbortError')console.warn('viewer play error',e);}}
+  try{el.viewerVideo.pause();el.viewerVideo.removeAttribute('src');el.viewerVideo.poster='';el.viewerVideo.controls=false;}catch(e){}
+  async function safePlay(v){try{await v.play();}catch(e){
+    if(e&&e.name==='NotAllowedError'){v.muted=true;try{await v.play();}catch(_){}}
+    else if(e&&e.name!=='AbortError')console.warn('viewer play error',e);
+  }}
   // 进度遮罩（复用）
   let prog=document.getElementById('viewerProgress');
   if(!prog){prog=document.createElement('div');prog.id='viewerProgress';prog.innerHTML='<i></i>';el.viewer.appendChild(prog);}
@@ -768,7 +791,8 @@ function renderViewer(){
     // 先快速拉缩略图作占位，切换时立即可见，不再“等十几秒黑屏”
     client.downloadMedia(msg,{thumb:'m'}).then(buf=>{if(buf&&buf.length&&myToken===viewerToken){el.viewerVideo.poster=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));}}).catch(()=>{});
     setP(0);
-    enqueueDownload(()=>client.downloadMedia(msg,{progressCallback:p=>{if(myToken===viewerToken)setP(p);}})).then(buf=>{
+    // priority 2：当前正在观看的视频永远插队到队列最前，立即下载（不被预取任务堵住）
+    enqueueDownload(()=>client.downloadMedia(msg,{progressCallback:p=>{if(myToken===viewerToken)setP(p);}}),2).then(buf=>{
       if(myToken!==viewerToken)return;
       if(!buf||!buf.length){prog.style.display='none';el.viewerCap.textContent='❌ 加载失败';return;}
       const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
@@ -913,7 +937,6 @@ function renderMediaStats(done){
     ...(s.members?[{k:'members',l:'成员',icon:ICONS.users,clickable:false}]:[]),
     {k:'video',l:'视频',icon:ICONS.video,clickable:true},
     {k:'image',l:'图片',icon:ICONS.image,clickable:true},
-    {k:'gif',l:'GIF',icon:ICONS.image,clickable:true},
     {k:'audio',l:'音频',icon:ICONS.audio,clickable:true},
     {k:'file',l:'文件',icon:ICONS.file,clickable:true},
     {k:'link',l:'链接',icon:ICONS.link,clickable:false},
@@ -991,7 +1014,20 @@ async function loadNetdisk(cat){
   if(!netdiskChannel)return;
   currentNetdiskCat=cat;
   el.netdiskGrid.innerHTML='<div class="loading-spinner"></div>';
-  try{const msgs=await client.getMessages(netdiskChannel,{limit:100});netdiskMediaList=msgs.filter(m=>mediaInfo(m));renderNetdisk(cat);}
+  try{
+    // 分页拉全量历史（此前只取 100 条导致网盘显示不全）
+    const all=[];let offsetId=0;
+    for(let guard=0;guard<20;guard++){           // 上限 2000 条，防卡死
+      const opts={limit:100};if(offsetId)opts.offsetId=offsetId;
+      const msgs=await client.getMessages(netdiskChannel,opts);
+      if(!msgs||!msgs.length)break;
+      all.push(...msgs);
+      if(msgs.length<100)break;
+      offsetId=msgs[msgs.length-1].id;
+    }
+    netdiskMediaList=all.filter(m=>mediaInfo(m));
+    renderNetdisk(cat);
+  }
   catch(e){el.netdiskGrid.innerHTML='<div class="empty-hint">加载失败：'+e.message+'</div>';}
 }
 function renderNetdisk(cat){
