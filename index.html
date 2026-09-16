@@ -202,21 +202,18 @@
   .vp-mute{width:28px;height:28px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.12);border-radius:50%;color:#fff;border:none;cursor:pointer;padding:0;}
   .vp-mute svg{width:16px;height:16px;fill:currentColor;}
 
-  /* 消息卡片（参考官方样式）：底部浏览量+时间；右下角圆形回复按钮 */
+  /* 消息卡片（参考官方样式）：底部浏览量+时间 */
   .msg-foot{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:2px;font-size:11px;color:var(--tg-sub);}
   .vf-views{display:inline-flex;align-items:center;gap:3px;opacity:.9;}
   .vf-views svg{opacity:.85;}
   .vf-time{font-variant-numeric:tabular-nums;}
-  .reply-fab{flex:0 0 auto;align-self:flex-end;width:30px;height:30px;margin:4px 0 0 6px;border-radius:50%;border:none;background:var(--tg-blue);color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,.18);}
-  .reply-fab svg{width:15px;height:15px;}
-  .reply-fab:active{transform:scale(.92);}
 
   /* 网盘 / 媒体浏览器卡片：三段式（顶部名称 + 中部媒体铺满 + 底部文件名+时间） */
   .mb-card, .nk-card{background:var(--tg-panel);border-radius:12px;overflow:hidden;cursor:pointer;display:flex;flex-direction:column;box-shadow:var(--tg-shadow);}
   .mb-name-bar, .nk-name-bar{font-size:12px;font-weight:600;padding:7px 9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tg-text);border-bottom:1px solid var(--tg-border);}
-  .mb-thumb{width:100%;aspect-ratio:16/10;background:var(--tg-attach);display:flex;align-items:center;justify-content:center;background-size:cover;background-position:center;background-repeat:no-repeat;position:relative;min-height:120px;}
+  .mb-thumb{width:100%;aspect-ratio:16/10;background:var(--tg-attach);display:flex;align-items:center;justify-content:center;background-size:cover;background-position:center;background-repeat:no-repeat;position:relative;}
   /* 网盘封面：正方形铺满卡片 */
-  .nk-thumb{width:100%;aspect-ratio:1/1;background:var(--tg-attach);display:flex;align-items:center;justify-content:center;background-size:cover;background-position:center;background-repeat:no-repeat;position:relative;min-height:120px;}
+  .nk-thumb{width:100%;aspect-ratio:1/1;background:var(--tg-attach);display:flex;align-items:center;justify-content:center;background-size:cover;background-position:center;background-repeat:no-repeat;position:relative;}
   .mb-thumb.play::after, .nk-thumb.play::after{content:"";position:absolute;width:0;height:0;border-left:22px solid #fff;border-top:14px solid transparent;border-bottom:14px solid transparent;filter:drop-shadow(0 1px 3px rgba(0,0,0,.6));}
   .mb-footer, .nk-footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 9px;border-top:1px solid var(--tg-border);}
   .mb-footer .mb-name, .nk-footer .nk-name{flex:1;min-width:0;font-size:11px;color:var(--tg-sub);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -296,8 +293,8 @@
   .nk-thumb, .mb-thumb{background-size:cover;background-position:center;background-repeat:no-repeat;}
 
   /* 卡片网格：桌面 8 列 / 手机 2 列，九宫格风格统一 */
-  #netdiskGrid:not(.list-mode), #mediaBrowserGrid:not(.list-mode){display:grid;grid-template-columns:repeat(8,1fr);gap:10px;padding:12px;align-content:start;}
-  #netdiskGrid:not(.list-mode) .nk-card, #mediaBrowserGrid:not(.list-mode) .mb-card{width:100%;margin:0;display:flex;}
+  #netdiskGrid:not(.list-mode), #mediaBrowserGrid:not(.list-mode){display:grid;grid-template-columns:repeat(8,1fr);gap:10px;padding:12px;align-content:start;align-items:start;}
+  #netdiskGrid:not(.list-mode) .nk-card, #mediaBrowserGrid:not(.list-mode) .mb-card{min-width:0;width:100%;margin:0;display:flex;}
   @media(max-width:768px){
     #netdiskGrid:not(.list-mode), #mediaBrowserGrid:not(.list-mode){grid-template-columns:repeat(2,1fr);gap:8px;padding:10px;}
   }
