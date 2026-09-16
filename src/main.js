@@ -6,7 +6,7 @@ import { NewMessage } from 'telegram/events';
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-console.log('[tg] build 2026-09-16.5 · 修复白屏(onclick) + el 缺失防御');
+console.log('[tg] build 2026-09-16.6 · 主页恢复聊天模式 + 媒体错误不再弹红条');
 const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
 const API_HASH = import.meta.env.VITE_API_HASH || '';
 const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
@@ -531,17 +531,7 @@ async function loadDialogs(){
     const dialogs=await client.getDialogs({limit:50});
     currentDialogs=dialogs.map(d=>({entity:d.entity,name:chatName(d.entity),message:d.message,id:d.entity.id,date:d.message?.date}));
     renderDialogs(currentDialogs);
-    fillNetdiskSelect();
-    // 网盘为主界面：登录后若已选频道则直接进入，否则打开设置让用户选择频道
-    const saved=localStorage.getItem('tg_netdisk');
-    if(saved)netdiskChannel=currentDialogs.find(d=>String(d.id)===saved)?.entity||null;
-    if(netdiskChannel){
-      el.netdisk.classList.add('open');
-      loadNetdisk(el.netdiskTabs.querySelector('.sel').dataset.cat);
-    }else{
-      el.settings.classList.add('open');
-      toast('请先在左侧选择一个频道作为网盘');
-    }
+    fillNetdiskSelect();   // 仅填充设置里的网盘频道下拉；主页保持聊天模式，网盘只从「设置 → 进入网盘」进入
   }catch(e){toast('加载对话失败：'+e.message);}
 }
 function renderDialogs(list){
