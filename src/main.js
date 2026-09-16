@@ -6,6 +6,7 @@ import { NewMessage } from 'telegram/events';
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
+const BUILD='v2026.09.16.8';
 console.log('[tg] build', BUILD, '· 卡片正方形兼容 + 屏显版本号');
 const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
 const API_HASH = import.meta.env.VITE_API_HASH || '';
@@ -335,7 +336,6 @@ async function loadThumb(node,msg){
 }
 
 // ===== 认证 =====
-const BUILD='v2026.09.16.8';
 async function init(){
   applyTheme();
   applyChatBg();
