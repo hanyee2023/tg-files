@@ -1,0 +1,67 @@
+diff --git a/node_modules/telegram/network/MTProtoSender.js b/node_modules/telegram/network/MTProtoSender.js
+index d7791fe..a73ec21 100644
+--- a/node_modules/telegram/network/MTProtoSender.js
++++ b/node_modules/telegram/network/MTProtoSender.js
+@@ -816,6 +816,14 @@ class MTProtoSender {
+         this._sendQueue.clear();
+         this._state.reset();
+         const connection = this._connection;
++        // 防御：移动端 WebView 在握手阶段 WS 掉线时，sender 可能进入重连但 _connection 尚未就绪，
++        // 此时访问 connection.constructor 会抛 "Cannot read properties of undefined (reading 'constructor')"。
++        // 改为安全降级，避免不透明崩溃，交由上层（应用层重试）恢复。
++        if (!connection) {
++            this._log && this._log.warn && this._log.warn("[reconnect] _connection 尚未就绪，跳过本次重连");
++            console.warn("[tg] _reconnect 跳过：_connection 为空（移动端 WS 握手阶段掉线）");
++            return;
++        }
+         // For some reason reusing existing connection caused stuck requests
+         // @ts-ignore
+         const newConnection = new connection.constructor({
+diff --git a/node_modules/telegram/tl/api.js b/node_modules/telegram/tl/api.js
+index c8b6564..a6579e8 100644
+--- a/node_modules/telegram/tl/api.js
++++ b/node_modules/telegram/tl/api.js
+@@ -42,7 +42,16 @@ class CastError extends Error {
+         // Custom debugging information
+     }
+ }
+-const CACHING_SUPPORTED = typeof self !== "undefined" && self.localStorage !== undefined;
++// 补丁：部分手机浏览器/WebView（隐私模式、拦截 Cookie）访问 self.localStorage 会直接抛
++// SecurityError，导致整个模块加载失败、页面白屏（build=undefined）。这里安全探测并全程 try/catch。
++const CACHING_SUPPORTED = (() => {
++    try {
++        return typeof self !== "undefined" && !!self.localStorage;
++    }
++    catch (e) {
++        return false;
++    }
++})();
+ const CACHE_KEY = "GramJs:apiCache";
+ function buildApiFromTlSchema() {
+     let definitions;
+@@ -53,14 +62,22 @@ function buildApiFromTlSchema() {
+     else {
+         definitions = loadFromTlSchemas();
+         if (CACHING_SUPPORTED) {
+-            localStorage.setItem(CACHE_KEY, JSON.stringify(definitions));
++            try {
++                localStorage.setItem(CACHE_KEY, JSON.stringify(definitions));
++            }
++            catch (e) { /* 存储不可用时跳过缓存 */ }
+         }
+     }
+     return createClasses("all", definitions);
+ }
+ function loadFromCache() {
+-    const jsonCache = localStorage.getItem(CACHE_KEY);
+-    return jsonCache && JSON.parse(jsonCache);
++    try {
++        const jsonCache = localStorage.getItem(CACHE_KEY);
++        return jsonCache && JSON.parse(jsonCache);
++    }
++    catch (e) {
++        return undefined;
++    }
+ }
+ function loadFromTlSchemas() {
+     const [constructorParamsApi, functionParamsApi] = extractParams(tlContent);
