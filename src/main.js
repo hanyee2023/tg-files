@@ -6,7 +6,7 @@ import { NewMessage } from 'telegram/events';
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-console.log('[tg] build 2026-09-16.7 · 卡片正方形兼容老浏览器(padding-bottom)');
+console.log('[tg] build', BUILD, '· 卡片正方形兼容 + 屏显版本号');
 const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
 const API_HASH = import.meta.env.VITE_API_HASH || '';
 const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
@@ -335,6 +335,7 @@ async function loadThumb(node,msg){
 }
 
 // ===== 认证 =====
+const BUILD='v2026.09.16.8';
 async function init(){
   applyTheme();
   applyChatBg();
@@ -342,6 +343,8 @@ async function init(){
   setupDetailsClose();
   setupLogin();
   setupChatSearch();
+  // 屏幕可见版本号：手机上不用 F12 也能确认部署是否更新（左下角小字）
+  try{const t=document.createElement('div');t.id='buildTag';t.textContent=BUILD;document.body.appendChild(t);}catch(e){}
   const sessionStr=localStorage.getItem('tg_session')||'';
   if(!API_ID || !API_HASH){
     const ov=document.getElementById('connOverlay');
@@ -1222,6 +1225,13 @@ function renderNetdisk(cat){
       el.netdiskGrid.appendChild(card);
       loadThumb(th,msg);
     }
+  });
+  // 老内核兜底：若 padding-bottom 撑高在极老浏览器上仍未生效（缩略图高度≈0），用 JS 按宽度显式设高
+  requestAnimationFrame(()=>{
+    el.netdiskGrid.querySelectorAll('.nk-thumb').forEach(t=>{
+      const r=t.getBoundingClientRect();
+      if(r.width>60&&r.height<r.width*0.6)t.style.height=r.width+'px';
+    });
   });
 }
 // 卡片「⋯」弹出菜单：下载 / 重命名 / 分享 / 删除
