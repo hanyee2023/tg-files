@@ -533,22 +533,35 @@ async function openChat(entity){
   document.querySelectorAll('.dialog').forEach(d=>d.classList.toggle('active',String(d.dataset.id)===String(entity.id)));
 }
 async function loadMessages(){
-  async function _load(){
+  // 单条消息渲染失败（个别异常消息/无权限）不应拖垮整页；逐条守卫
+  const tryOnce=async()=>{
     const msgs=await client.getMessages(currentEntity,{limit:40});
     el.messages.innerHTML='';currentMediaList=[];
-    for(const m of msgs.reverse())await appendMessage(m,false);
+    let ok=0;
+    for(const m of msgs.reverse()){
+      try{ await appendMessage(m,false); ok++; }
+      catch(e){ console.warn('[tg] 单条消息渲染失败，已跳过：',e&&e.message?e.message:e); }
+    }
     flushAlbum(false);
     oldestId=msgs.length?msgs[0].id:null;
     el.messages.scrollTop=el.messages.scrollHeight;
-  }
-  try{
-    await _load();
-  }catch(e){
-    console.warn('[tg] 首次加载消息失败，1.5s 后重试：',e);
-    try{await new Promise(r=>setTimeout(r,1500));await _load();}
-    catch(e2){el.messages.innerHTML='<div class="empty-hint">加载消息失败：'+(e2&&e2.message?e2.message:e2)+'</div>';toast('加载消息失败：'+(e2&&e2.message?e2.message:e2));}
+    return ok;
+  };
+  let lastErr=null;
+  for(let attempt=1;attempt<=3;attempt++){
+    try{
+      const ok=await tryOnce();
+      if(ok>0||attempt===3){loadingOlder=false;return;}  // 已加载出消息则停止重试
+    }catch(e){
+      lastErr=e;
+      console.warn(`[tg] 加载消息失败（第 ${attempt}/3 次）：`,e);
+      if(attempt<3)await new Promise(r=>setTimeout(r,1500*attempt));
+    }
   }
   loadingOlder=false;
+  const detail=lastErr&&lastErr.message?lastErr.message:String(lastErr||'未知错误');
+  el.messages.innerHTML='<div class="empty-hint">加载消息失败：'+detail+'<br><br>多为该频道接口瞬时错误或被限制（FLOOD_WAIT）。请稍后重试，或 F12 控制台查看 [tg] 日志。</div>';
+  toast('加载消息失败：'+detail);
 }
 // 向上滚动加载更早的历史消息
 async function loadOlder(){
@@ -560,7 +573,7 @@ async function loadOlder(){
     const msgs=await client.getMessages(currentEntity,{limit:40,offsetId:oldestId});
     if(msgs&&msgs.length){
       // getMessages 返回最新→最旧；预插入需按最新→最旧遍历（insertBefore 首条），顺序才正确
-      for(const m of msgs)await appendMessage(m,true);
+      for(const m of msgs){ try{ await appendMessage(m,true); }catch(e){ console.warn('[tg] 历史单条渲染失败，已跳过：',e&&e.message?e.message:e); } }
       flushAlbum(true);
       oldestId=msgs[msgs.length-1].id;
       el.messages.scrollTop=prevTop+(el.messages.scrollHeight-prevH);
@@ -851,8 +864,8 @@ function renderViewer(){
   const setP=()=>{};
 
   if(info&&(info.type==='video'||info.type==='gif')){
-    el.viewerVideo.style.display='block';el.viewerVideo.controls=true;
-    if(mediaCache.has(key)){prog.style.display='none';el.viewerVideo.src=mediaCache.get(key);safePlay(el.viewerVideo);return;}
+    el.viewerVideo.style.display='block';el.viewerVideo.controls=true;el.viewerVideo.muted=true;
+    if(mediaCache.has(key)){el.viewerVideo.src=mediaCache.get(key);safePlay(el.viewerVideo);return;}
     const mime=(msg.video&&msg.video.mimeType)||(msg.document&&msg.document.mimeType)||'video/mp4';
     // 先快速拉缩略图作占位，切换时立即可见，不再“等十几秒黑屏”
     client.downloadMedia(msg,{thumb:'m'}).then(buf=>{if(buf&&buf.length&&myToken===viewerToken){el.viewerVideo.poster=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));}}).catch(()=>{});
@@ -860,19 +873,19 @@ function renderViewer(){
     // priority 2：当前正在观看的视频永远插队到队列最前，立即下载（不被预取任务堵住）
     enqueueDownload(()=>client.downloadMedia(msg,{progressCallback:p=>{if(myToken===viewerToken)setP(p);}}),2).then(buf=>{
       if(myToken!==viewerToken)return;
-      if(!buf||!buf.length){prog.style.display='none';el.viewerCap.textContent='❌ 加载失败';return;}
+      if(!buf||!buf.length){el.viewerCap.textContent='❌ 加载失败';return;}
       const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
-      prog.style.display='none';el.viewerVideo.src=url;safePlay(el.viewerVideo);
-    }).catch(()=>{if(myToken===viewerToken){prog.style.display='none';el.viewerCap.textContent='❌ 加载失败';}});
+      el.viewerVideo.src=url;safePlay(el.viewerVideo);
+    }).catch(()=>{if(myToken===viewerToken){el.viewerCap.textContent='❌ 加载失败';}});
   }else if(info&&info.type==='image'){
     el.viewerMedia.style.display='block';
     if(mediaCache.has(key)){el.viewerMedia.src=mediaCache.get(key);return;}
-    client.downloadMedia(msg,{progressCallback:p=>{if(myToken===viewerToken)setP(p);}}).then(buf=>{if(myToken!==viewerToken)return;if(buf&&buf.length){const url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));mediaCache.set(key,url);el.viewerMedia.src=url;}}).catch(()=>{if(myToken===viewerToken){prog.style.display='none';el.viewerCap.textContent='❌ 加载失败';}});
+    client.downloadMedia(msg,{progressCallback:p=>{if(myToken===viewerToken)setP(p);}}).then(buf=>{if(myToken!==viewerToken)return;if(buf&&buf.length){const url=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));mediaCache.set(key,url);el.viewerMedia.src=url;}}).catch(()=>{if(myToken===viewerToken){el.viewerCap.textContent='❌ 加载失败';}});
   }else if(info&&info.type==='audio'){
-    el.viewerVideo.style.display='block';el.viewerVideo.controls=true;
-    if(mediaCache.has(key)){prog.style.display='none';el.viewerVideo.src=mediaCache.get(key);safePlay(el.viewerVideo);return;}
+    el.viewerVideo.style.display='block';el.viewerVideo.controls=true;el.viewerVideo.muted=true;
+    if(mediaCache.has(key)){el.viewerVideo.src=mediaCache.get(key);safePlay(el.viewerVideo);return;}
     setP(0);
-    client.downloadMedia(msg,{progressCallback:p=>{if(myToken===viewerToken)setP(p);}}).then(buf=>{if(myToken!==viewerToken)return;if(buf&&buf.length){const url=URL.createObjectURL(new Blob([buf],{type:info.mime||'audio/mpeg'}));mediaCache.set(key,url);prog.style.display='none';el.viewerVideo.src=url;safePlay(el.viewerVideo);}}).catch(()=>{if(myToken===viewerToken){prog.style.display='none';el.viewerCap.textContent='❌ 加载失败';}});
+    client.downloadMedia(msg,{progressCallback:p=>{if(myToken===viewerToken)setP(p);}}).then(buf=>{if(myToken!==viewerToken)return;if(buf&&buf.length){const url=URL.createObjectURL(new Blob([buf],{type:info.mime||'audio/mpeg'}));mediaCache.set(key,url);el.viewerVideo.src=url;safePlay(el.viewerVideo);}}).catch(()=>{if(myToken===viewerToken){el.viewerCap.textContent='❌ 加载失败';}});
   }else{
     el.viewerMedia.style.display='block';el.viewerMedia.alt='[文件] '+(info?info.name:'');el.viewerCap.textContent=(info?info.name:'')+'  ·  '+fmtSize(info?info.size:0);
   }
