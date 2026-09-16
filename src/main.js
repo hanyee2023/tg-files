@@ -6,7 +6,7 @@ import { NewMessage } from 'telegram/events';
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-console.log('[tg] build 2026-09-16.4 · 边下边播 + 网盘卡片修复');
+console.log('[tg] build 2026-09-16.5 · 修复白屏(onclick) + el 缺失防御');
 const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
 const API_HASH = import.meta.env.VITE_API_HASH || '';
 const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
@@ -41,7 +41,7 @@ if (PROXY_DOMAIN) {
 
 // ===== DOM =====
 const $ = (id) => document.getElementById(id);
-const el = {
+const _elRaw = {
   dialogs: $('dialogs'), searchInput: $('searchInput'),
   chatHeader: $('chatHeader'), chatAvatar: $('chatAvatar'),
   chatTitle: $('chatTitle'), chatStatus: $('chatStatus'),
@@ -54,7 +54,7 @@ const el = {
   netdiskSelect: $('netdiskSelect'), btnEnterNetdisk: $('btnEnterNetdisk'), btnLogout: $('btnLogout'),
   bgFileInput: $('bgFileInput'), btnBgImage: $('btnBgImage'), btnBgReset: $('btnBgReset'),
   netdisk: $('netdisk'), netdiskTabs: $('netdiskTabs'), netdiskGrid: $('netdiskGrid'),
-  btnNetdiskBack: $('btnNetdiskBack'), btnNetdiskClose: $('btnNetdiskClose'),
+  btnNetdiskMenu: $('btnNetdiskMenu'),
   btnNetdiskUpload: $('btnNetdiskUpload'), netdiskFileInput: $('netdiskFileInput'),
   viewer: $('viewer'), viewerMedia: $('viewerMedia'), viewerVideo: $('viewerVideo'),
   viewerCap: $('viewerCap'), viewerClose: $('viewerClose'),
@@ -73,7 +73,19 @@ const el = {
   mediaBrowser: $('mediaBrowser'), mediaBrowserGrid: $('mediaBrowserGrid'),
   mediaBrowserTitle: $('mediaBrowserTitle'), mediaBrowserClose: $('mediaBrowserClose'),
   btnNetdiskView: $('btnNetdiskView'), btnMediaView: $('btnMediaView'),
+  btnNetdiskMenu: $('btnNetdiskMenu'),
 };
+// 防御：HTML 中若缺失某元素，返回 no-op 桩而非 undefined/null，
+// 避免单个绑定报错导致整段脚本中断、整页白屏（缺失项仅静默失效 + 控制台告警）
+const _elStub = new Proxy(function(){}, {
+  get(){ return new Proxy(function(){}, { get(){ return _elStub; }, apply(){ return _elStub; } }); },
+  apply(){ return _elStub; },
+});
+const el = new Proxy(_elRaw, {
+  get(t, p){ if(typeof p === 'symbol') return t[p]; if(p in t) return t[p];
+    console.warn('[tg] 元素缺失：el.'+String(p)+' 不存在于 DOM，相关功能已跳过'); return _elStub; },
+  set(t, p, v){ t[p] = v; return true; }
+});
 
 // ===== 状态 =====
 let client = null, currentEntity = null, currentDialogs = [];
