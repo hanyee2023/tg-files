@@ -5,6 +5,8 @@ import { CustomFile } from 'telegram/client/uploads';
 import { NewMessage } from 'telegram/events';
 
 // ===== 配置 =====
+// 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
+console.log('[tg] build 2026-09-16.4 · 边下边播 + 网盘卡片修复');
 const API_ID = parseInt(import.meta.env.VITE_API_ID || '0');
 const API_HASH = import.meta.env.VITE_API_HASH || '';
 const PROXY_DOMAIN = import.meta.env.VITE_PROXY_DOMAIN || '';
@@ -52,7 +54,7 @@ const el = {
   netdiskSelect: $('netdiskSelect'), btnEnterNetdisk: $('btnEnterNetdisk'), btnLogout: $('btnLogout'),
   bgFileInput: $('bgFileInput'), btnBgImage: $('btnBgImage'), btnBgReset: $('btnBgReset'),
   netdisk: $('netdisk'), netdiskTabs: $('netdiskTabs'), netdiskGrid: $('netdiskGrid'),
-  btnNetdiskBack: $('btnNetdiskBack'), btnNetdiskClose: $('btnNetdiskClose'),
+  btnNetdiskMenu: $('btnNetdiskMenu'),
   btnNetdiskUpload: $('btnNetdiskUpload'), netdiskFileInput: $('netdiskFileInput'),
   viewer: $('viewer'), viewerMedia: $('viewerMedia'), viewerVideo: $('viewerVideo'),
   viewerCap: $('viewerCap'), viewerClose: $('viewerClose'),
@@ -71,6 +73,7 @@ const el = {
   mediaBrowser: $('mediaBrowser'), mediaBrowserGrid: $('mediaBrowserGrid'),
   mediaBrowserTitle: $('mediaBrowserTitle'), mediaBrowserClose: $('mediaBrowserClose'),
   btnNetdiskView: $('btnNetdiskView'), btnMediaView: $('btnMediaView'),
+  btnNetdiskMenu: $('btnNetdiskMenu'),
 };
 
 // ===== 状态 =====
@@ -89,6 +92,7 @@ let lastFocusVideo = null;      // 当前正在播放/加载的视频消息，�
 // ===== 视频下载串行化（同一时间只下载一条视频，集中带宽给正在播放的那条）=====
 let _dlRunning = false;
 const _dlQueue = [];
+let streamHold=false;   // 边下边播进行中：普通/预取下载暂停排队，带宽全部让给正在播放的视频
 // priority: 2=正在播放（最优先） 1=普通 0=预取（最低，让路给播放）
 function enqueueDownload(task,priority=1){
   return new Promise((resolve,reject)=>{
@@ -105,9 +109,37 @@ document.addEventListener('play',e=>{
 function _pumpDownloads(){
   if(_dlRunning)return;
   if(!_dlQueue.length)return;
+  if(streamHold&&_dlQueue[0].priority<2)return;   // 流式播放中，只放行"正在播放"级别任务
   _dlRunning=true;
   const {task,resolve,reject}=_dlQueue.shift();
   Promise.resolve().then(task).then(resolve,e=>reject(e)).finally(()=>{_dlRunning=false;_pumpDownloads();});
+}
+// ===== 准流式播放：分段下载视频，头部(约1.5MB)到达立即开播，其余后台续传，完成后无缝换源 =====
+const STREAM_HEAD=1.5*1024*1024;
+async function streamVideo(msg,entity,{isStale,onProgress,onPartial,onFull,onError}){
+  streamHold=true;
+  try{
+    const iter=client.iterDownload({file:msg.media,requestSize:524288,msgData:[entity,msg.id]});
+    const chunks=[];let got=0;let partialDone=false;let stale=false;
+    const info=mediaInfo(msg);const mime=(info&&info.mime)||'video/mp4';
+    const total=info?info.size:0;
+    for await(const chunk of iter){
+      if(isStale()){stale=true;try{await iter.close();}catch(e){}break;}
+      chunks.push(chunk);got+=chunk.length;
+      if(onProgress)onProgress(total?got/total:0,got);
+      if(!partialDone&&got>=STREAM_HEAD&&total-got>262144){
+        partialDone=true;
+        if(onPartial)onPartial(new Blob(chunks,{type:mime}),got);
+      }
+    }
+    if(stale)return;
+    if(onFull)onFull(new Blob(chunks,{type:mime}));
+  }catch(e){
+    console.warn('[tg] streamVideo error',e);
+    if(onError)onError(e);
+  }finally{
+    streamHold=false;_pumpDownloads();
+  }
 }
 
 // ===== 工具 =====
@@ -185,6 +217,11 @@ function netdiskCategory(msg){
   const fileExts=['apk','ipa','exe','dmg','deb','rpm','msi','app','xapk','zip','rar','7z','tar','gz','iso','bin'];
   if(docExts.includes(ext))return 'document';
   return 'file';   // 其余（含安装包/压缩包/未知类型）归入文件
+}
+// 网盘显示名：Telegram 不能直接改文件的真实文件名，用消息 caption 作为“重命名”后的名字
+function displayName(msg){
+  const t=(msg.message||'').trim(); if(t)return t;
+  const i=mediaInfo(msg); return i?i.name:'文件';
 }
 
 // ===== 主题 =====
@@ -296,7 +333,8 @@ async function init(){
   setupChatSearch();
   const sessionStr=localStorage.getItem('tg_session')||'';
   if(!API_ID || !API_HASH){
-    el.messages.innerHTML='<div class="empty-hint">未配置 API_ID / API_HASH。请在 Cloudflare Pages 的环境变量中设置 VITE_API_ID、VITE_API_HASH、VITE_PROXY_DOMAIN，然后重新部署。</div>';
+    const ov=document.getElementById('connOverlay');
+    if(ov){ov.innerHTML='<div class="box"><b>缺少 API 配置</b><br>请在 Cloudflare Pages 的环境变量中设置 <code>VITE_API_ID</code>、<code>VITE_API_HASH</code>、<code>VITE_PROXY_DOMAIN</code>，然后重新部署。</div>';ov.classList.remove('hidden');}
     toast('缺少 API 配置'); return;
   }
   createClient(sessionStr);
@@ -356,13 +394,14 @@ async function tryConnect(){
 }
 function showConnFail(reason){
   setConn('error',reason.length>40?reason.slice(0,40)+'…':reason);
-  el.messages.innerHTML='<div class="empty-hint" style="text-align:left;max-width:520px;margin:0 auto;line-height:1.9;">'
-    +'<b style="color:#e53935;">连接 Telegram 失败</b><br>'+reason
+  const ov=document.getElementById('connOverlay');
+  if(ov)ov.innerHTML='<div class="box"><b>连接 Telegram 失败</b><br>'+reason
     +'<br><br><b>自查清单：</b>'
-    +'<br>1. F12 控制台搜索 <code>[tg]</code>，确认 WebSocket 地址是否为 <code>wss://tele.reader.cc.cd/…/apiws</code>'
+    +'<br>1. F12 控制台搜索 <code>[tg]</code>，确认 WebSocket 地址是否为 <code>wss://'+PROXY_DOMAIN+'/…/apiws</code>'
     +'<br>2. 若显示「直连」：说明本次构建没带 <code>VITE_PROXY_DOMAIN</code>，需在 Cloudflare Pages 环境变量中补齐后重新部署'
-    +'<br>3. 若代理地址正确仍失败：浏览器直接打开 <code>https://tele.reader.cc.cd/</code> 确认 Worker 在线'
-    +'<br><br><button class="btn primary" onclick="location.reload()">重新连接</button></div>';
+    +'<br>3. 若代理地址正确仍失败：浏览器直接打开 <code>https://'+PROXY_DOMAIN+'/</code> 确认 Worker 在线'
+    +'<br><br><button class="recon" onclick="location.reload()">重新连接</button></div>';
+  if(ov)ov.classList.remove('hidden');
 }
 // 连接状态指示（右上角固定小圆点，避免"空白但不知道卡在哪"）
 function setConn(state,msg){
@@ -482,6 +521,16 @@ async function loadDialogs(){
     currentDialogs=dialogs.map(d=>({entity:d.entity,name:chatName(d.entity),message:d.message,id:d.entity.id,date:d.message?.date}));
     renderDialogs(currentDialogs);
     fillNetdiskSelect();
+    // 网盘为主界面：登录后若已选频道则直接进入，否则打开设置让用户选择频道
+    const saved=localStorage.getItem('tg_netdisk');
+    if(saved)netdiskChannel=currentDialogs.find(d=>String(d.id)===saved)?.entity||null;
+    if(netdiskChannel){
+      el.netdisk.classList.add('open');
+      loadNetdisk(el.netdiskTabs.querySelector('.sel').dataset.cat);
+    }else{
+      el.settings.classList.add('open');
+      toast('请先在左侧选择一个频道作为网盘');
+    }
   }catch(e){toast('加载对话失败：'+e.message);}
 }
 function renderDialogs(list){
@@ -749,15 +798,23 @@ async function playVideo(host,msg,entity){
   if(mediaCache.has(key)){ // 已缓存：直接即播，进度置满
     const url=mediaCache.get(key);v.src=url;setLoadProgress(1);safePlay();return;
   }
-  try{
-    // 串行化下载：正在播放本条时，其它视频下载排队等待，集中流量给本条
-    const buf=await enqueueDownload(()=>client.downloadMedia(msg,{progressCallback:p=>{if(lastFocusVideo===msg)setLoadProgress(p);}}),2);
-    if(lastFocusVideo!==msg)return; // 已切走，丢弃
-    if(!buf||!buf.length){host.innerHTML='❌ 播放失败';return;}
-    const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
-    v.src=url;setLoadProgress(1);
-    safePlay();   // 已静音，不受自动播放限制，一次点击即播
-  }catch(e){host.innerHTML='❌ 播放失败';}
+  // 准流式：头部到达即开播（不用等整段下载完），进度环同时显示真实下载进度
+  streamVideo(msg,entity,{
+    isStale:()=>lastFocusVideo!==msg,
+    onProgress:(p)=>{if(lastFocusVideo===msg)setLoadProgress(p);},
+    onPartial:(blob)=>{
+      if(lastFocusVideo!==msg)return;
+      v.src=URL.createObjectURL(blob);safePlay();   // 边下边播：先播已到的部分
+    },
+    onFull:(blob)=>{
+      if(lastFocusVideo!==msg)return;
+      const url=URL.createObjectURL(blob);mediaCache.set(key,url);
+      const t=v.currentTime||0;
+      v.src=url;v.addEventListener('loadedmetadata',()=>{try{v.currentTime=t;}catch(e){}},{once:true});
+      setLoadProgress(1);safePlay();   // 无缝换完整源，播放位置不跳
+    },
+    onError:()=>{if(lastFocusVideo===msg)host.innerHTML='<div class="empty-hint">❌ 播放失败</div>';}
+  });
 }
 
 // ===== 发送（含上传圆形进度）=====
@@ -821,8 +878,8 @@ async function deleteMessage(id){
 }
 
 // ===== 下载 / 分享 =====
-async function downloadMedia(msg){
-  try{const info=mediaInfo(msg);const name=info?info.name:'file';
+async function downloadMedia(msg,nameOverride){
+  try{const info=mediaInfo(msg);const name=nameOverride||(info?info.name:'file');
     const buf=await client.downloadMedia(msg);if(!buf||!buf.length){toast('下载为空');return;}
     const mime=info?info.mime:'application/octet-stream';
     const url=URL.createObjectURL(new Blob([buf],{type:mime}));
@@ -830,8 +887,8 @@ async function downloadMedia(msg){
     setTimeout(()=>URL.revokeObjectURL(url),10000);
   }catch(e){toast('下载失败：'+e.message);}
 }
-async function shareMedia(msg){
-  const info=mediaInfo(msg);const name=info?info.name:'文件';
+async function shareMedia(msg,nameOverride){
+  const info=mediaInfo(msg);const name=nameOverride||(info?info.name:'文件');
   if(navigator.share){try{const buf=await client.downloadMedia(msg);const file=new File([buf],name,{type:info?info.mime:'application/octet-stream'});await navigator.share({files:[file],title:name});return;}catch(e){}}
   let link='';if(msg.chat&&msg.chat.username)link=`https://t.me/${msg.chat.username}/${msg.id}`;else if(currentEntity&&currentEntity.username)link=`https://t.me/${currentEntity.username}/${msg.id}`;
   if(link){await navigator.clipboard.writeText(link);toast('链接已复制');}else toast('该消息无可分享链接');
@@ -872,17 +929,29 @@ function renderViewer(){
   if(info&&(info.type==='video'||info.type==='gif')){
     el.viewerVideo.style.display='block';el.viewerVideo.controls=true;el.viewerVideo.muted=true;
     if(mediaCache.has(key)){el.viewerVideo.src=mediaCache.get(key);safePlay(el.viewerVideo);return;}
-    const mime=(msg.video&&msg.video.mimeType)||(msg.document&&msg.document.mimeType)||'video/mp4';
-    // 先快速拉缩略图作占位，切换时立即可见，不再“等十几秒黑屏”
+    // 先快速拉缩略图作占位，切换瞬间即可看到画面
     client.downloadMedia(msg,{thumb:'m'}).then(buf=>{if(buf&&buf.length&&myToken===viewerToken){el.viewerVideo.poster=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));}}).catch(()=>{});
-    setP(0);
-    // priority 2：当前正在观看的视频永远插队到队列最前，立即下载（不被预取任务堵住）
-    enqueueDownload(()=>client.downloadMedia(msg,{progressCallback:p=>{if(myToken===viewerToken)setP(p);}}),2).then(buf=>{
-      if(myToken!==viewerToken)return;
-      if(!buf||!buf.length){el.viewerCap.textContent='❌ 加载失败';return;}
-      const url=URL.createObjectURL(new Blob([buf],{type:mime}));mediaCache.set(key,url);
-      el.viewerVideo.src=url;safePlay(el.viewerVideo);
-    }).catch(()=>{if(myToken===viewerToken){el.viewerCap.textContent='❌ 加载失败';}});
+    el.viewerCap.textContent='缓冲中…';
+    // 准流式：头部到达即开播，不等整段下载；百分比实时显示
+    streamVideo(msg,viewerEntity,{
+      isStale:()=>myToken!==viewerToken,
+      onProgress:(p)=>{if(myToken===viewerToken)el.viewerCap.textContent='缓冲中 '+Math.round(Math.min(1,p)*100)+'%';},
+      onPartial:(blob)=>{
+        if(myToken!==viewerToken)return;
+        el.viewerVideo.src=URL.createObjectURL(blob);el.viewerCap.textContent='';
+        safePlay(el.viewerVideo);   // 边下边播
+      },
+      onFull:(blob)=>{
+        if(myToken!==viewerToken)return;
+        const url=URL.createObjectURL(blob);mediaCache.set(key,url);
+        const t=el.viewerVideo.currentTime||0;const muted=el.viewerVideo.muted;
+        el.viewerVideo.src=url;el.viewerVideo.muted=muted;
+        if(t>0)el.viewerVideo.addEventListener('loadedmetadata',()=>{try{el.viewerVideo.currentTime=t;}catch(e){}},{once:true});
+        el.viewerCap.textContent='';
+        safePlay(el.viewerVideo);   // 无缝换完整源，播放位置不跳
+      },
+      onError:()=>{if(myToken===viewerToken)el.viewerCap.textContent='❌ 加载失败';}
+    });
   }else if(info&&info.type==='image'){
     el.viewerMedia.style.display='block';
     if(mediaCache.has(key)){el.viewerMedia.src=mediaCache.get(key);return;}
@@ -1091,9 +1160,10 @@ el.btnEnterNetdisk.onclick=()=>{
   el.netdisk.classList.add('open');
   loadNetdisk(el.netdiskTabs.querySelector('.sel').dataset.cat);
 };
-el.btnNetdiskBack.onclick=el.btnNetdiskClose.onclick=()=>el.netdisk.classList.remove('open');
+el.btnNetdiskMenu.onclick=()=>{el.netdisk.classList.remove('open');el.settings.classList.add('open');};
 el.netdiskTabs.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;el.netdiskTabs.querySelectorAll('button').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');loadNetdisk(b.dataset.cat);});
-el.btnNetdiskView.onclick=()=>{netdiskView=netdiskView==='card'?'list':'card';el.btnNetdiskView.textContent=netdiskView==='card'?'☰ 列表':'▦ 卡片';renderNetdisk(currentNetdiskCat);};
+el.btnNetdiskView.onclick=()=>{netdiskView=netdiskView==='card'?'list':'card';renderNetdisk(currentNetdiskCat);};
+$('netdiskSearchInput').addEventListener('input',()=>renderNetdisk(currentNetdiskCat));
 el.btnMediaView.onclick=()=>{mediaBrowserView=mediaBrowserView==='card'?'list':'card';el.btnMediaView.textContent=mediaBrowserView==='card'?'☰ 列表':'▦ 卡片';openMediaBrowser(currentMediaBrowserType);};
 async function loadNetdisk(cat){
   if(!netdiskChannel)return;
@@ -1116,38 +1186,68 @@ async function loadNetdisk(cat){
   catch(e){el.netdiskGrid.innerHTML='<div class="empty-hint">加载失败：'+e.message+'</div>';}
 }
 function renderNetdisk(cat){
-  const list=cat==='all'?netdiskMediaList:netdiskMediaList.filter(m=>netdiskCategory(m)===cat);
+  const q=($('netdiskSearchInput').value||'').trim().toLowerCase();
+  let list=cat==='all'?netdiskMediaList:netdiskMediaList.filter(m=>netdiskCategory(m)===cat);
+  if(q)list=list.filter(m=>displayName(m).toLowerCase().includes(q));
   el.netdiskGrid.className=netdiskView==='list'?'list-mode':'';
   el.netdiskGrid.innerHTML='';
-  if(!list.length){el.netdiskGrid.innerHTML='<div class="empty-hint">暂无文件</div>';return;}
-  const chName=chatName(netdiskChannel);
+  if(!list.length){el.netdiskGrid.innerHTML='<div class="empty-hint">'+(q?'未找到匹配的文件':'暂无文件')+'</div>';return;}
   list.forEach((msg,i)=>{
     const info=mediaInfo(msg);
+    const name=displayName(msg);
+    const more=document.createElement('button');more.className='nk-act';more.textContent='⋯';more.title='更多';
+    more.onclick=(ev)=>{ev.stopPropagation();openCardMenu(more,msg);};
     if(netdiskView==='list'){
       const row=document.createElement('div');row.className='nk-row';
       const th=document.createElement('div');th.className='nk-thumb sm';
       th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
       if(info.type==='video')th.classList.add('play');else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
       const meta=document.createElement('div');meta.className='nk-meta';
-      meta.innerHTML=`<div class="nk-name">${escapeHtml(info.name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
-      row.append(th,meta);row.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
+      meta.innerHTML=`<div class="nk-name">${escapeHtml(name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
+      row.append(th,meta,more);row.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
       el.netdiskGrid.appendChild(row);
       loadThumb(th,msg);
     }else{
       const card=document.createElement('div');card.className='nk-card';
-      const nameBar=document.createElement('div');nameBar.className='nk-name-bar';nameBar.textContent=chName;
+      const nameBar=document.createElement('div');nameBar.className='nk-name-bar';nameBar.textContent=name;
       const th=document.createElement('div');th.className='nk-thumb';
       th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
       if(info.type==='video')th.classList.add('play');else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
       const footer=document.createElement('div');footer.className='nk-footer';
-      const nm=document.createElement('div');nm.className='nk-name';nm.textContent=info.name;
+      const nm=document.createElement('div');nm.className='nk-name';nm.textContent=fmtSize(info.size);
       const tm=document.createElement('div');tm.className='nk-time';tm.textContent=msg.date?fmtTime(msg.date).split(' ')[1]:'';
       footer.append(nm,tm);
-      card.append(nameBar,th,footer);card.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
+      card.append(nameBar,th,footer,more);card.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
       el.netdiskGrid.appendChild(card);
       loadThumb(th,msg);
     }
   });
+}
+// 卡片「⋯」弹出菜单：下载 / 重命名 / 分享 / 删除
+function openCardMenu(anchor,msg){
+  const menu=$('nkCardMenu');menu.innerHTML='';
+  const acts=[['下载',()=>downloadMedia(msg,displayName(msg))],['重命名',()=>renameItem(msg)],['分享',()=>shareMedia(msg,displayName(msg))],['删除',()=>deleteNetdiskItem(msg)]];
+  acts.forEach(([label,fn])=>{const b=document.createElement('button');b.textContent=label;if(label==='删除')b.className='danger';b.onclick=()=>{menu.classList.remove('open');fn();};menu.appendChild(b);});
+  const r=anchor.getBoundingClientRect();
+  menu.style.top=Math.min(r.bottom+6,innerHeight-170)+'px';
+  menu.style.left=Math.max(8,Math.min(r.left,innerWidth-162))+'px';
+  menu.classList.add('open');
+}
+document.addEventListener('click',e=>{ if(!e.target.closest('.card-menu')&&!e.target.closest('.nk-act')){const m=$('nkCardMenu');if(m)m.classList.remove('open');} });
+// 重命名 = 编辑消息 caption（Telegram 无法直接改文件底层文件名，caption 即显示名/下载名）
+async function renameItem(msg){
+  const cur=displayName(msg);
+  const nn=prompt('重命名（将作为显示名与下载名）：',cur);
+  if(nn==null)return; const name=nn.trim(); if(!name)return;
+  try{ await client.editMessage(netdiskChannel,{message:msg.id,text:name}); msg.message=name; toast('已重命名'); renderNetdisk(currentNetdiskCat); }
+  catch(e){ toast('重命名失败：'+e.message); }
+}
+async function deleteNetdiskItem(msg){
+  if(!confirm('确定删除「'+displayName(msg)+'」？'))return;
+  try{ await client.deleteMessages(netdiskChannel,[msg.id],{revoke:true});
+    netdiskMediaList=netdiskMediaList.filter(m=>m.id!==msg.id);
+    renderNetdisk(currentNetdiskCat); toast('已删除'); }
+  catch(e){ toast('删除失败：'+e.message); }
 }
 el.btnNetdiskUpload.onclick=()=>el.netdiskFileInput.click();
 el.netdiskFileInput.addEventListener('change',async(e)=>{
