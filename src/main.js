@@ -9,14 +9,17 @@ import { NewMessage } from 'telegram/events';
 // SecurityError；一旦在模块顶层抛出，整个应用都不会运行（屏显表现为 build=undefined）。
 // 这里统一兜底：读不到→内存，写不进→内存，绝不在顶层抛错。
 const _memStore={};
-function sGet(k){ try{ const v=window.localStorage.getItem(k); if(v!==null&&v!==undefined)return v; }catch(e){} return (k in _memStore)?_memStore[k]:null; }
-function sSet(k,v){ try{ window.localStorage.setItem(k,String(v)); }catch(e){} _memStore[k]=String(v); }
-function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} delete _memStore[k]; }
+// cookie 兜底：手机隐私模式下 localStorage 常被禁/不持久，cookie 通常仍能跨刷新保留关键配置与登录态
+function _cGet(k){ try{ const m=document.cookie.match('(^|; )'+k+'=([^;]*)'); if(m)return decodeURIComponent(m[2]); }catch(e){} return null; }
+function _cSet(k,v){ try{ document.cookie=k+'='+encodeURIComponent(v)+';path=/;max-age='+(365*86400)+';samesite=lax'; }catch(e){} }
+function sGet(k){ try{ const v=window.localStorage.getItem(k); if(v!==null&&v!==undefined)return v; }catch(e){} const c=_cGet(k); if(c!==null)return c; return (k in _memStore)?_memStore[k]:null; }
+function sSet(k,v){ try{ window.localStorage.setItem(k,String(v)); }catch(e){} _cSet(k,String(v)); _memStore[k]=String(v); }
+function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ document.cookie=k+'=;path=/;max-age=0'; }catch(e){} delete _memStore[k]; }
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.16.13';
-console.log('[tg] build', BUILD, '· 移动端顶层防崩(安全存储兜底) + 页内API配置表单 + 忽略第三方脱敏错误');
+const BUILD='v2026.09.16.14';
+console.log('[tg] build', BUILD, '· 专项修复手机端登录：配置保存后不刷新直接登录(内存实时配置) + 代理运行时动态生效');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
 function _readCfg(){
@@ -29,11 +32,26 @@ function _readCfg(){
   };
 }
 const _cfg=_readCfg();
-const API_ID = parseInt(_cfg.apiId||'0',10)||0;
-const API_HASH = _cfg.apiHash||'';
-const PROXY_DOMAIN = _cfg.proxy||'';
+// 注意：用 let 而非 const —— 表单保存时要在运行时更新（手机端 localStorage 不稳定，不能依赖刷新页面来重新读取）
+let API_ID = parseInt(_cfg.apiId||'0',10)||0;
+let API_HASH = _cfg.apiHash||'';
+let PROXY_DOMAIN = _cfg.proxy||'';
 // 暴露配置状态到全局，供页面上的“屏显诊断”读取（无需 F12）
-window.__CFG={build:BUILD, api:!!API_ID, hash:!!API_HASH, proxy:PROXY_DOMAIN||'(未设置)'};
+function _syncCfg(){
+  window.__CFG={build:BUILD, api:!!API_ID, hash:!!API_HASH, proxy:PROXY_DOMAIN||'(未设置)'};
+  try{ const t=document.getElementById('buildTag'); if(t)t.textContent='build '+BUILD+' · API:'+(API_ID?'✓':'✗')+' 代理:'+(PROXY_DOMAIN?PROXY_DOMAIN.slice(0,18):'未设'); }catch(e){}
+}
+_syncCfg();
+// 运行时应用配置：表单保存时调用，直接写入内存 + 落盘，无需刷新页面。
+// 这样即便手机浏览器禁用了 localStorage（刷新即丢），本次会话也能正常登录。
+function applyLiveCfg(a,h,p){
+  API_ID=parseInt((a||'').trim()||'0',10)||0;
+  API_HASH=(h||'').trim();
+  PROXY_DOMAIN=(p||'').trim();
+  _cfg.apiId=String(API_ID);_cfg.apiHash=API_HASH;_cfg.proxy=PROXY_DOMAIN;
+  sSet('tg_api_id',API_ID);sSet('tg_api_hash',API_HASH);sSet('tg_proxy',PROXY_DOMAIN);
+  _syncCfg();
+}
 // 打开/关闭登录卡片内的 API 配置表单（不用 prompt()——部分手机 WebView 会拦截）
 function openConfig(force){
   try{
@@ -53,9 +71,8 @@ try{
   let t=document.getElementById('buildTag');
   if(!t){ t=document.createElement('div'); t.id='buildTag'; document.body.appendChild(t); }
   t.style.pointerEvents='auto'; t.style.cursor='pointer';
-  const _c=window.__CFG;
-  t.textContent='build '+_c.build+' · API:'+(_c.api?'✓':'✗')+' 代理:'+(_c.proxy!=='(未设置)'?_c.proxy.slice(0,18):'未设');
   t.onclick=function(){openConfig();};
+  _syncCfg();
 }catch(e){}
 
 // ===== 代理：重写 GramJS 内部 WebSocket 地址 =====
@@ -111,16 +128,15 @@ class ProxiedWebSockets extends PromisedWebSockets {
   }
 }
 if (!PROXY_DOMAIN) console.warn('[tg] 未设置 VITE_PROXY_DOMAIN，将直连 Telegram（国内大概率失败）。');
-if (PROXY_DOMAIN) {
-  const origFetch = self.fetch;
-  self.fetch = function (input, init) {
-    let s = typeof input === 'string' ? input : (input?.url || '');
-    if (s.includes('telegram.org') && !s.includes(PROXY_DOMAIN)) {
-      try { const u = new URL(s); s = `https://${PROXY_DOMAIN}/${u.hostname}${u.pathname}${u.search}`; input = typeof input === 'string' ? s : new Request(s, input); } catch (e) {}
-    }
-    return origFetch.call(self, input, init);
-  };
-}
+// 代理按“调用时”读取 PROXY_DOMAIN，保证表单里改了代理也能立即生效（不再依赖刷新）
+const _origFetch = self.fetch;
+self.fetch = function (input, init) {
+  let s = typeof input === 'string' ? input : (input?.url || '');
+  if (PROXY_DOMAIN && s.includes('telegram.org') && !s.includes(PROXY_DOMAIN)) {
+    try { const u = new URL(s); s = `https://${PROXY_DOMAIN}/${u.hostname}${u.pathname}${u.search}`; input = typeof input === 'string' ? s : new Request(s, input); } catch (e) {}
+  }
+  return _origFetch.call(self, input, init);
+};
 
 // ===== DOM =====
 const $ = (id) => document.getElementById(id);
@@ -436,8 +452,10 @@ async function init(){
         const p=((document.getElementById('cfgProxy')||{}).value||'').trim();
         if(!/^\d+$/.test(a)){toast('API_ID 必须是纯数字');return;}
         if(!h){toast('API_HASH 不能为空');return;}
-        sSet('tg_api_id',a);sSet('tg_api_hash',h);sSet('tg_proxy',p);
-        toast('已保存，正在刷新…');setTimeout(()=>location.reload(),600);
+        applyLiveCfg(a,h,p);          // 直接写入内存 + 落盘，无需刷新页面
+        try{ document.getElementById('apiCfg').classList.add('hidden'); }catch(e){}
+        toast('已保存，正在登录…');
+        afterConfigReady();           // 用新配置继续登录流程（不再 reload，规避手机端存储丢值）
       };
     }
   }catch(e){}
@@ -462,6 +480,16 @@ let connAttempt=0;
 function createClient(sessionStr){
   client=new TelegramClient(new StringSession(sessionStr),API_ID,API_HASH,{connectionRetries:3,retryDelay:1500,useWSS:true,networkSocket:ProxiedWebSockets,requestRetries:2});
   client.addEventHandler(onNewMessage,new NewMessage({}));
+}
+// 表单保存后（无刷新）：用内存中的新配置继续登录流程。
+// 手机端 localStorage 不稳定时，这一步是“能登进去”的关键——不再依赖刷新重新读值。
+function afterConfigReady(){
+  connAttempt=0;
+  const sessionStr=sGet('tg_session')||'';
+  createClient(sessionStr);          // 用最新 API_ID/HASH/PROXY 重建客户端
+  showLogin();
+  if(el.loginErr)el.loginErr.textContent='';
+  if(sessionStr&&sessionStr.length>=20){ tryConnect(); }  // 已有登录态则直接重连
 }
 // 连接前探测代理域名是否可达（no-cors opaque 请求，可达即 resolve）
 async function probeProxy(){
