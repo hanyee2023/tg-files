@@ -17,6 +17,8 @@
   html[data-accent="blue"]{--tg-blue:#3390ec;--tg-blue-shade:#2b7cd3;}
   html[data-accent="green"]{--tg-blue:#2fae5f;--tg-blue-shade:#259b50;}
   html[data-accent="purple"]{--tg-blue:#8a5cf6;--tg-blue-shade:#7450d8;}
+  html[data-accent="orange"]{--tg-blue:#f59e0b;--tg-blue-shade:#d98708;}
+  html[data-accent="red"]{--tg-blue:#e8513e;--tg-blue-shade:#c8412f;}
   html[data-theme="dark"]{
     --tg-bg:#17212b; --tg-panel:#17212b; --tg-panel-2:#131c26;
     --tg-hover:#232e3c; --tg-active:#3390ec33; --tg-border:#101a24;
@@ -145,9 +147,9 @@
   .panel-head{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--tg-border);font-size:17px;font-weight:600;}
   .panel-head .spacer{flex:1;}
 
-  #accountHeader{display:flex;align-items:center;gap:12px;padding:18px 16px;background:var(--tg-blue);color:#fff;}
-  #accountHeader .avatar{background:rgba(255,255,255,.2);}
-  #accountHeader .a-name{font-size:17px;font-weight:700;}
+  #accountHeader{display:flex;align-items:center;gap:12px;padding:13px 16px;background:var(--tg-blue);color:#fff;transition:padding .15s;}
+  #accountHeader .avatar{background:rgba(255,255,255,.2);width:46px;height:46px;font-size:18px;}
+  #accountHeader .a-name{font-size:16px;font-weight:700;}
   #accountHeader .a-sub{font-size:12px;opacity:.85;}
 
   .panel-body{flex:1;overflow-y:auto;padding:8px 0 16px;}
@@ -377,6 +379,39 @@
   /* 屏显版本号：用于在手机上直接确认部署版本（无需 F12） */
   /* 版本号：移到设置栏底部，去掉固定定位 */
   #buildTag{margin:14px 16px 10px;text-align:center;font-size:11px;color:var(--tg-sub);opacity:.7;border-top:1px solid var(--tg-border);padding-top:10px;font-variant-numeric:tabular-nums;user-select:text;cursor:pointer;line-height:1.6;}
+
+  /* ===== 本次增强：设置开关 / 主题色 / 下载进度 / 网盘移动端 ===== */
+  /* 夜间模式 / 通用开关 */
+  .switch{position:relative;width:42px;height:24px;flex:0 0 auto;}
+  .switch input{opacity:0;width:0;height:0;margin:0;}
+  .switch .slider{position:absolute;inset:0;background:var(--tg-border);border-radius:999px;transition:.2s;cursor:pointer;}
+  .switch .slider::before{content:'';position:absolute;width:18px;height:18px;left:3px;top:3px;background:#fff;border-radius:50%;box-shadow:0 1px 3px rgba(0,0,0,.3);transition:.2s;}
+  .switch input:checked + .slider{background:var(--tg-blue);}
+  .switch input:checked + .slider::before{transform:translateX(18px);}
+  /* 主题色新增 橙 / 红 */
+  .seg .s-orange{background:#f59e0b;}
+  .seg .s-red{background:#e8513e;}
+  /* 聊天背景：上传 / 恢复默认 单独成行 */
+  .bg-actions{display:flex;align-items:center;gap:18px;margin-top:2px;}
+  .hint-text{font-size:12px;color:var(--tg-sub);line-height:1.5;}
+  /* 账号头部滚动时紧凑 */
+  #accountHeader.compact{padding:8px 16px;}
+  #accountHeader.compact .avatar{width:38px;height:38px;font-size:15px;}
+  #accountHeader.compact .a-name{font-size:15px;}
+  /* 网盘列表：移动端防横向溢出 */
+  #netdiskGrid{overflow-x:hidden;}
+  .nk-row{width:100%;}
+  .nk-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .nk-topbar{max-width:100%;}
+  /* 下载进度浮层（底部居中，仿系统下载条） */
+  #dlToast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(20px);width:min(92vw,360px);background:var(--tg-panel);border:1px solid var(--tg-border);border-radius:12px;padding:10px 14px;box-shadow:0 4px 18px rgba(0,0,0,.22);z-index:300;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;}
+  #dlToast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+  .dl-row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:7px;}
+  .dl-name{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tg-text);flex:1;min-width:0;}
+  .dl-pct{color:var(--tg-blue);font-variant-numeric:tabular-nums;flex:0 0 auto;}
+  .dl-bar{height:5px;border-radius:3px;background:var(--tg-panel-2);overflow:hidden;}
+  .dl-bar > i{display:block;height:100%;width:0;background:var(--tg-blue);transition:width .15s;}
+  .dl-note{font-size:11px;color:var(--tg-sub);margin-top:5px;}
 </style>
 </head>
 <body>
@@ -549,11 +584,8 @@
       <div class="section-title">外观</div>
       <div class="opt">
         <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg></span>
-        <span class="label">主题</span>
-        <div class="seg" id="segTheme">
-          <button class="t-light sel" data-v="light" title="浅色"></button>
-          <button class="t-dark" data-v="dark" title="深色"></button>
-        </div>
+        <span class="label">夜间模式</span>
+        <label class="switch"><input type="checkbox" id="chkDark"><span class="slider"></span></label>
       </div>
       <div class="opt">
         <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 2-2 0-.7.6-1.3 1.3-1.3H17a4 4 0 0 0 4-4c0-4.4-4-6.7-9-6.7z"/><circle cx="7.5" cy="11" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="11" r="1" fill="currentColor" stroke="none"/></svg></span>
@@ -562,6 +594,8 @@
           <button class="s-blue sel" data-v="blue" title="蓝"></button>
           <button class="s-green" data-v="green" title="绿"></button>
           <button class="s-purple" data-v="purple" title="紫"></button>
+          <button class="s-orange" data-v="orange" title="橙"></button>
+          <button class="s-red" data-v="red" title="红"></button>
         </div>
       </div>
       <div class="opt col">
@@ -572,10 +606,22 @@
           <span class="bg-swatch" data-bg="#e3f3fd" style="background:#e3f3fd;"></span>
           <span class="bg-swatch" data-bg="#effdde" style="background:#effdde;"></span>
           <span class="bg-swatch" data-bg="#f7e7ff" style="background:#f7e7ff;"></span>
+        </div>
+        <div class="bg-actions">
           <span class="bg-file" id="btnBgImage">上传图片</span>
           <span class="bg-file" id="btnBgReset">恢复默认</span>
           <input id="bgFileInput" type="file" accept="image/*" hidden>
         </div>
+      </div>
+      <div class="section-title">下载</div>
+      <div class="opt">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg></span>
+        <span class="label">下载后自动打开</span>
+        <label class="switch"><input type="checkbox" id="chkAutoOpen"><span class="slider"></span></label>
+      </div>
+      <div class="opt col">
+        <div class="opt-line"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg></span><span class="label">下载说明</span></div>
+        <div class="hint-text">文件通过浏览器自带下载管理器保存（手机在「下载」目录）。下载进度显示在底部进度条，可在聊天 / 网盘的「⋯ → 下载」触发。</div>
       </div>
       <div class="section-title">网盘模式</div>
       <div class="opt col">
@@ -619,6 +665,13 @@
 
   <!-- 全局连接错误浮层（网盘为主界面后，连接失败需全局可见） -->
   <div id="connOverlay" class="hidden"></div>
+
+  <!-- 下载进度浮层（底部居中，仿系统下载条） -->
+  <div id="dlToast">
+    <div class="dl-row"><span class="dl-name"></span><span class="dl-pct">0%</span></div>
+    <div class="dl-bar"><i></i></div>
+    <div class="dl-note">通过浏览器下载管理器保存（手机在「下载」目录）</div>
+  </div>
 
   <!-- 媒体查看器 -->
   <div id="viewer">
