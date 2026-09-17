@@ -18,8 +18,8 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ docum
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.16.14';
-console.log('[tg] build', BUILD, '· 专项修复手机端登录：配置保存后不刷新直接登录(内存实时配置) + 代理运行时动态生效');
+const BUILD='v2026.09.16.15';
+console.log('[tg] build', BUILD, '· 去登录页API输入框(纯环境变量) + AUTH_KEY_UNREGISTERED自动清旧会话重登 + 环境变量缺失屏显诊断');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
 function _readCfg(){
@@ -42,36 +42,12 @@ function _syncCfg(){
   try{ const t=document.getElementById('buildTag'); if(t)t.textContent='build '+BUILD+' · API:'+(API_ID?'✓':'✗')+' 代理:'+(PROXY_DOMAIN?PROXY_DOMAIN.slice(0,18):'未设'); }catch(e){}
 }
 _syncCfg();
-// 运行时应用配置：表单保存时调用，直接写入内存 + 落盘，无需刷新页面。
-// 这样即便手机浏览器禁用了 localStorage（刷新即丢），本次会话也能正常登录。
-function applyLiveCfg(a,h,p){
-  API_ID=parseInt((a||'').trim()||'0',10)||0;
-  API_HASH=(h||'').trim();
-  PROXY_DOMAIN=(p||'').trim();
-  _cfg.apiId=String(API_ID);_cfg.apiHash=API_HASH;_cfg.proxy=PROXY_DOMAIN;
-  sSet('tg_api_id',API_ID);sSet('tg_api_hash',API_HASH);sSet('tg_proxy',PROXY_DOMAIN);
-  _syncCfg();
-}
-// 打开/关闭登录卡片内的 API 配置表单（不用 prompt()——部分手机 WebView 会拦截）
-function openConfig(force){
-  try{
-    const box=document.getElementById('apiCfg'); if(!box)return;
-    const want=(force===undefined)?box.classList.contains('hidden'):!!force;
-    box.classList.toggle('hidden',!want);
-    if(want){
-      const a=document.getElementById('cfgApiId'),h=document.getElementById('cfgApiHash'),p=document.getElementById('cfgProxy');
-      if(a)a.value=sGet('tg_api_id')||_cfg.apiId||'';
-      if(h)h.value=sGet('tg_api_hash')||_cfg.apiHash||'';
-      if(p)p.value=sGet('tg_proxy')||_cfg.proxy||'';
-    }
-  }catch(e){}
-}
-// 左下角可点击版本号（构建版本 + 配置状态），点击展开配置表单
+// 左下角可点击版本号（构建版本 + 配置状态），点击显示环境诊断（只读，不再弹输入框）
 try{
   let t=document.getElementById('buildTag');
   if(!t){ t=document.createElement('div'); t.id='buildTag'; document.body.appendChild(t); }
   t.style.pointerEvents='auto'; t.style.cursor='pointer';
-  t.onclick=function(){openConfig();};
+  t.onclick=function(){showEnvMissing(true);};
   _syncCfg();
 }catch(e){}
 
@@ -441,30 +417,10 @@ async function init(){
   setupDetailsClose();
   setupLogin();
   setupChatSearch();
-  // 页内 API 配置表单：保存按钮（登录卡片里，缺配置时自动展开，也可点左下角版本号展开）
-  try{
-    const sb=document.getElementById('cfgSave');
-    if(sb&&!sb.dataset.bound){
-      sb.dataset.bound='1';
-      sb.onclick=()=>{
-        const a=((document.getElementById('cfgApiId')||{}).value||'').trim();
-        const h=((document.getElementById('cfgApiHash')||{}).value||'').trim();
-        const p=((document.getElementById('cfgProxy')||{}).value||'').trim();
-        if(!/^\d+$/.test(a)){toast('API_ID 必须是纯数字');return;}
-        if(!h){toast('API_HASH 不能为空');return;}
-        applyLiveCfg(a,h,p);          // 直接写入内存 + 落盘，无需刷新页面
-        try{ document.getElementById('apiCfg').classList.add('hidden'); }catch(e){}
-        toast('已保存，正在登录…');
-        afterConfigReady();           // 用新配置继续登录流程（不再 reload，规避手机端存储丢值）
-      };
-    }
-  }catch(e){}
   const sessionStr=sGet('tg_session')||'';
   if(!API_ID || !API_HASH){
-    // 缺配置：展示登录卡片 + 自动展开配置表单（不再用 connOverlay 遮罩，手机上更直观）
-    showLogin();
-    openConfig(true);
-    el.loginErr && (el.loginErr.textContent='请先填写 API_ID / API_HASH（点左下角版本号也可展开）');
+    // 环境变量未注入：不再弹输入框，改为屏显明确诊断（让用户去 Cloudflare 修正配置）
+    showEnvMissing();
     return;
   }
   createClient(sessionStr);
@@ -481,15 +437,19 @@ function createClient(sessionStr){
   client=new TelegramClient(new StringSession(sessionStr),API_ID,API_HASH,{connectionRetries:3,retryDelay:1500,useWSS:true,networkSocket:ProxiedWebSockets,requestRetries:2});
   client.addEventHandler(onNewMessage,new NewMessage({}));
 }
-// 表单保存后（无刷新）：用内存中的新配置继续登录流程。
-// 手机端 localStorage 不稳定时，这一步是“能登进去”的关键——不再依赖刷新重新读值。
-function afterConfigReady(){
+// 登录态失效（AUTH_KEY_UNREGISTERED 等）时：清除本地旧会话，退回重新输手机号登录
+function resetToFreshLogin(reason){
+  try{ sDel('tg_session'); sDel('tg_self'); }catch(e){}
+  try{
+    client=new TelegramClient(new StringSession(''),API_ID,API_HASH,{connectionRetries:3,retryDelay:1500,useWSS:true,networkSocket:ProxiedWebSockets,requestRetries:2});
+    client.addEventHandler(onNewMessage,new NewMessage({}));
+  }catch(e){}
   connAttempt=0;
-  const sessionStr=sGet('tg_session')||'';
-  createClient(sessionStr);          // 用最新 API_ID/HASH/PROXY 重建客户端
   showLogin();
-  if(el.loginErr)el.loginErr.textContent='';
-  if(sessionStr&&sessionStr.length>=20){ tryConnect(); }  // 已有登录态则直接重连
+  if(el.loginStepCode)el.loginStepCode.style.display='none';
+  if(el.loginStepPhone)el.loginStepPhone.style.display='flex';
+  if(el.loginErr)el.loginErr.textContent=reason||'登录态已失效，请重新输入手机号登录';
+  setConn('idle');
 }
 // 连接前探测代理域名是否可达（no-cors opaque 请求，可达即 resolve）
 async function probeProxy(){
@@ -526,6 +486,12 @@ async function tryConnect(){
     console.error('[tg] 连接失败（'+dt+'s）：',e);
     // 保存完整错误（含堆栈），供屏显诊断 / 复制给开发者
     window.__lastConnectError = (e && (e.stack || (e.message + (e.cause ? ('\n'+(e.cause.stack||e.cause.message)) : '')))) || String(e);
+    const em=(e&&e.message)||'';
+    // 登录态失效（换了代理/DC 后旧会话密钥不被服务器认）：自动清掉旧会话，退回重新输手机号，无需手动清缓存
+    if(/AUTH_KEY_(UNREGISTERED|INVALID|DUP)/.test(em)){
+      resetToFreshLogin('登录态已失效（AUTH_KEY_UNREGISTERED）：已自动清除旧会话，请重新输入手机号登录');
+      return;
+    }
     if(connAttempt<3){
       setConn('error',e.message);
       toast('连接失败，3 秒后自动重试（第 '+connAttempt+'/3 次）');
@@ -535,6 +501,33 @@ async function tryConnect(){
       showConnectDiag(e);
     }
   }
+}
+// 环境变量未注入时的屏显诊断（不再弹输入框）：明确告诉用户是 Cloudflare 配置问题，而非代码崩
+function showEnvMissing(force){
+  const cfg=window.__CFG||{};
+  const detail='[构建] build='+BUILD
+    +'\n[检测到] API_ID='+(cfg.api?'已注入 ✓':'缺失 ✗')+'  API_HASH='+(cfg.hash?'已注入 ✓':'缺失 ✗')+'  代理='+(PROXY_DOMAIN||'缺失 ✗')
+    +'\n\nCloudflare Pages 环境变量未生效，常见原因（按概率）：'
+    +'\n1. 变量名缺少 VITE_ 前缀（必须是 VITE_API_ID / VITE_API_HASH / VITE_PROXY_DOMAIN，少一个字母都不行）'
+    +'\n2. 只在 Production 作用域设置，却访问 Preview / *.pages.dev（反之亦然）——两个作用域都要加'
+    +'\n3. 设完变量没有重新构建：Deployments → 最新一次 → Retry / Redeploy'
+    +'\n4. 用的是“上传 zip”直传（静态），根本不跑 npm run build —— 必须连 Git 仓库或 wrangler 构建'
+    +'\n\n修正后重新部署，打开即自动登录，无需填任何信息。';
+  console.warn('[tg] 环境变量未注入\n'+detail);
+  let d=document.getElementById('__envMissing');
+  if(!d){
+    d=document.createElement('div');d.id='__envMissing';
+    d.style.cssText='position:fixed;left:0;right:0;top:0;background:#1b1b1f;color:#ffd479;font:12px/1.6 monospace;padding:14px;z-index:99999;max-height:70vh;overflow:auto;box-shadow:0 2px 12px rgba(0,0,0,.5);white-space:pre-wrap;';
+    document.body.appendChild(d);
+  }
+  d.innerHTML='<b>⚠ 缺少 Telegram API 配置（环境变量未注入）</b>\n'
+    +detail.split('\n').map(l=>l.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))).join('\n')
+    +'\n\n<button id="__envCopy" style="margin-top:10px;padding:5px 12px;background:#ffd479;color:#1b1b1f;border:0;border-radius:6px;">复制说明</button>'
+    +'<button id="__envClose" style="margin-top:10px;margin-left:8px;padding:5px 12px;background:#333;color:#fff;border:0;border-radius:6px;">关闭</button>';
+  const cp=document.getElementById('__envCopy');
+  if(cp)cp.onclick=()=>{try{navigator.clipboard.writeText(d.innerText);toast('已复制');}catch(_){}};
+  const cl=document.getElementById('__envClose');
+  if(cl)cl.onclick=()=>{d.remove();};
 }
 // 屏显连接诊断：把完整错误信息（消息+堆栈）显示为可复制的浮层，便于在无 DevTools 的手机端定位根因
 function showConnectDiag(e){
