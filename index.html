@@ -150,19 +150,39 @@
   #accountHeader .a-name{font-size:17px;font-weight:700;}
   #accountHeader .a-sub{font-size:12px;opacity:.85;}
 
-  .panel-body{flex:1;overflow-y:auto;padding:8px 0;}
-  .section-title{padding:14px 16px 6px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--tg-sub);}
-  .opt{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;gap:10px;}
+  .panel-body{flex:1;overflow-y:auto;padding:8px 0 16px;}
+  .section-title{padding:20px 16px 6px;font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--tg-sub);font-weight:600;}
+  .opt{display:flex;align-items:center;gap:14px;padding:12px 16px;transition:background .12s;}
   .opt:hover{background:var(--tg-hover);}
-  .opt .label{font-size:14px;}
-  .seg{display:flex;gap:6px;}
-  .seg button{width:30px;height:30px;border-radius:50%;border:2px solid transparent;}
-  .seg button.sel{border-color:var(--tg-text);}
+  .opt .ico{width:26px;height:26px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:var(--tg-blue);}
+  .opt .ico svg{width:22px;height:22px;}
+  .opt .label{flex:1;min-width:0;font-size:15px;color:var(--tg-text);}
+  .opt-line{display:flex;align-items:center;gap:14px;}
+  .opt.col{flex-direction:column;align-items:stretch;gap:10px;}
+  .opt.col .label{font-size:13px;color:var(--tg-sub);}
+  .opt select{width:100%;background:var(--tg-bg);color:var(--tg-text);border:1px solid var(--tg-border);border-radius:8px;padding:9px 10px;font-size:14px;outline:none;}
+  .opt select:focus{border-color:var(--tg-blue);}
+  .seg{display:flex;gap:8px;}
+  .seg button{width:32px;height:32px;border-radius:50%;border:2px solid transparent;transition:.12s;cursor:pointer;}
+  .seg button:hover{transform:scale(1.08);}
+  .seg button.sel{border-color:var(--tg-text);box-shadow:0 0 0 2px var(--tg-panel) inset;}
   .seg .s-blue{background:#3390ec;}.seg .s-green{background:#2fae5f;}.seg .s-purple{background:#8a5cf6;}
-  .seg .t-light{background:var(--tg-bg);border:1px solid var(--tg-border);}
+  .seg .t-light{background:#fff;border:1px solid var(--tg-border);}
   .seg .t-dark{background:#0e1621;}
-  .bg-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
-  .bg-swatch{width:28px;height:28px;border-radius:50%;border:1px solid var(--tg-border);cursor:pointer;}
+  .bg-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+  .bg-swatch{width:30px;height:30px;border-radius:50%;border:1px solid var(--tg-border);cursor:pointer;transition:transform .12s;}
+  .bg-swatch:hover{transform:scale(1.12);}
+  .bg-file{font-size:13px;color:var(--tg-blue);cursor:pointer;text-decoration:underline;}
+  .primary-btn{width:100%;background:var(--tg-blue);color:#fff;border-radius:10px;padding:11px;font-weight:600;font-size:15px;transition:background .15s;}
+  .primary-btn:hover{background:var(--tg-blue-shade);}
+  .danger-btn{width:100%;color:var(--tg-danger);font-weight:600;font-size:15px;padding:11px;border-radius:10px;background:none;transition:background .12s;}
+  .danger-btn:hover{background:var(--tg-hover);}
+  /* 回到底部悬浮按钮（Telegram 风格：左下角圆形，带未读计数角标） */
+  #btnScrollBottom{position:absolute;left:16px;bottom:78px;width:46px;height:46px;border-radius:50%;background:var(--tg-panel);color:var(--tg-blue);border:1px solid var(--tg-border);box-shadow:0 2px 10px rgba(0,0,0,.18);display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:8;opacity:0;transform:translateY(8px) scale(.9);pointer-events:none;transition:opacity .18s,transform .18s;}
+  #btnScrollBottom.show{opacity:1;transform:translateY(0) scale(1);pointer-events:auto;}
+  #btnScrollBottom svg{width:24px;height:24px;}
+  #btnScrollBottom .badge{position:absolute;top:-5px;right:-5px;min-width:19px;height:19px;padding:0 5px;background:var(--tg-blue);color:#fff;border-radius:10px;font-size:11px;font-weight:600;display:none;align-items:center;justify-content:center;line-height:1;border:2px solid var(--tg-panel);}
+  #btnScrollBottom.has-new .badge{display:flex;}
   .bg-file{font-size:13px;color:var(--tg-blue);cursor:pointer;text-decoration:underline;}
 
   /* 网盘（全屏，应用主界面） */
@@ -304,7 +324,7 @@
   #viewerProgress{position:relative;margin:14px auto 0;width:min(60vw,300px);height:6px;border-radius:3px;background:rgba(255,255,255,.25);overflow:hidden;z-index:5;display:none;}
   #viewerProgress > i{display:block;height:100%;width:0;background:#fff;transition:width .2s;}
   /* 连接状态芯片 */
-  #conn-chip{position:fixed;top:12px;right:16px;z-index:9999;display:flex;align-items:center;gap:8px;background:var(--tg-card,#fff);border:1px solid rgba(0,0,0,.08);border-radius:999px;padding:6px 14px;font-size:13px;color:#707579;box-shadow:0 2px 10px rgba(0,0,0,.08);transition:opacity .5s;pointer-events:none;}
+  #conn-chip{position:fixed;top:12px;right:16px;z-index:9999;display:flex;align-items:center;gap:8px;background:var(--tg-card,#fff);border:1px solid rgba(0,0,0,.08);border-radius:999px;padding:6px 14px;font-size:13px;color:var(--tg-sub);box-shadow:0 2px 10px rgba(0,0,0,.08);transition:opacity .5s;pointer-events:none;}
   .conn-dot{width:8px;height:8px;border-radius:50%;flex:0 0 auto;}
   .conn-dot.on{background:#f5a623;animation:pulse 1.2s infinite;}
   .conn-dot.ok{background:#4caf50;}
@@ -358,6 +378,7 @@
   /* 版本号：移到设置栏底部，去掉固定定位 */
   #buildTag{margin:14px 16px 10px;text-align:center;font-size:11px;color:var(--tg-sub);opacity:.7;border-top:1px solid var(--tg-border);padding-top:10px;font-variant-numeric:tabular-nums;user-select:text;cursor:pointer;line-height:1.6;}
 </style>
+  <script type="module" crossorigin src="/assets/index-BZ2c4o7j.js"></script>
 </head>
 <body>
   <script>
@@ -481,6 +502,10 @@
         </button>
       </div>
       <div id="messages"><div class="empty-hint">选择一个对话开始聊天</div></div>
+      <button id="btnScrollBottom" title="回到底部" aria-label="回到底部">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>
+        <span class="badge">0</span>
+      </button>
       <div id="composer">
         <button id="btnAttach" class="icon-btn" title="附件">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
@@ -523,40 +548,44 @@
     </div>
     <div class="panel-body">
       <div class="section-title">外观</div>
-      <div class="opt"><span class="label">主题</span>
+      <div class="opt">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg></span>
+        <span class="label">主题</span>
         <div class="seg" id="segTheme">
           <button class="t-light sel" data-v="light" title="浅色"></button>
           <button class="t-dark" data-v="dark" title="深色"></button>
         </div>
       </div>
-      <div class="opt"><span class="label">主题色</span>
+      <div class="opt">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3a9 9 0 1 0 0 18c1.4 0 2-1 2-2 0-.7.6-1.3 1.3-1.3H17a4 4 0 0 0 4-4c0-4.4-4-6.7-9-6.7z"/><circle cx="7.5" cy="11" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="8" r="1" fill="currentColor" stroke="none"/><circle cx="16" cy="11" r="1" fill="currentColor" stroke="none"/></svg></span>
+        <span class="label">主题色</span>
         <div class="seg" id="segAccent">
           <button class="s-blue sel" data-v="blue" title="蓝"></button>
           <button class="s-green" data-v="green" title="绿"></button>
           <button class="s-purple" data-v="purple" title="紫"></button>
         </div>
       </div>
-      <div class="opt" style="flex-direction:column;align-items:stretch;gap:8px;">
-        <span class="label">聊天背景</span>
+      <div class="opt col">
+        <div class="opt-line"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg></span><span class="label">聊天背景</span></div>
         <div class="bg-row">
-          <span class="bg-swatch" data-bg="#ffffff" style="background:#ffffff;border:1px solid #ccc;"></span>
+          <span class="bg-swatch" data-bg="#ffffff" style="background:#ffffff;"></span>
           <span class="bg-swatch" data-bg="#f0f2f5" style="background:#f0f2f5;"></span>
           <span class="bg-swatch" data-bg="#e3f3fd" style="background:#e3f3fd;"></span>
           <span class="bg-swatch" data-bg="#effdde" style="background:#effdde;"></span>
           <span class="bg-swatch" data-bg="#f7e7ff" style="background:#f7e7ff;"></span>
           <span class="bg-file" id="btnBgImage">上传图片</span>
-          <span class="bg-file" id="btnBgReset" style="color:var(--tg-sub);">恢复默认</span>
+          <span class="bg-file" id="btnBgReset">恢复默认</span>
           <input id="bgFileInput" type="file" accept="image/*" hidden>
         </div>
       </div>
       <div class="section-title">网盘模式</div>
-      <div class="opt" style="flex-direction:column;align-items:stretch;gap:8px;">
-        <span class="label">选择频道作为网盘</span>
-        <select id="netdiskSelect" style="background:var(--tg-bg);color:var(--tg-text);border:1px solid var(--tg-border);border-radius:8px;padding:8px;"></select>
+      <div class="opt col">
+        <div class="opt-line"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span class="label">选择频道作为网盘</span></div>
+        <select id="netdiskSelect"></select>
       </div>
-      <div class="opt"><button id="btnEnterNetdisk" style="width:100%;background:var(--tg-blue);color:#fff;border-radius:10px;padding:10px;font-weight:600;">进入网盘</button></div>
+      <div class="opt"><button id="btnEnterNetdisk" class="primary-btn">进入网盘</button></div>
       <div class="section-title">账号</div>
-      <div class="opt"><button id="btnLogout" style="width:100%;color:var(--tg-danger);font-weight:600;">退出登录</button></div>
+      <div class="opt"><button id="btnLogout" class="danger-btn">退出登录</button></div>
       <div id="buildTag"></div>
     </div>
   </div>
@@ -664,6 +693,5 @@
     <div id="chatSearchLoading" class="empty-hint" style="display:none">搜索中…</div>
   </div>
 
-  <script type="module" src="/src/main.js"></script>
 </body>
 </html>
