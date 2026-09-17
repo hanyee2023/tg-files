@@ -18,8 +18,8 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ docum
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.16.15';
-console.log('[tg] build', BUILD, '· 去登录页API输入框(纯环境变量) + AUTH_KEY_UNREGISTERED自动清旧会话重登 + 环境变量缺失屏显诊断');
+const BUILD='v2026.09.16.16';
+console.log('[tg] build', BUILD, '· 修复登录根因：sendCode 参数签名错误(手机号传成了undefined) + client.signIn不存在改用auth.SignIn + 两步验证支持');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
 function _readCfg(){
@@ -593,6 +593,7 @@ function showAccount(me){
 
 // ===== 页面内登录（替代 prompt，未登录显示登录页，有登录记录自动进主页）=====
 let loginPhoneCodeHash=null;
+let loginPwMode=false; // 两步验证模式：验证码输入框此时收集云密码
 function showLogin(){el.login.classList.remove('hidden');}
 function hideLogin(){el.login.classList.add('hidden');}
 function setupLogin(){
@@ -606,8 +607,12 @@ function setupLogin(){
         client.connect(),
         new Promise((_,rej)=>setTimeout(()=>rej(new Error('连接超时（15 秒）')),15000)),
       ]);
-      const sent=await client.sendCode({apiId:API_ID,apiHash:API_HASH,phoneNumber:phone});
+      // gramJS 2.26.22 签名：sendCode(apiCredentials, phoneNumber, forceSMS)
+      // 手机号必须是第二个参数！之前把它塞进第一个对象里，phoneNumber=undefined，
+      // 序列化时 serializeBytes(undefined) 抛 "Cannot read properties of undefined (reading 'constructor')"
+      const sent=await client.sendCode({apiId:API_ID,apiHash:API_HASH},phone);
       loginPhoneCodeHash=sent.phoneCodeHash;
+      loginPwMode=false;
       el.loginStepPhone.style.display='none';
       el.loginStepCode.style.display='flex';
       el.loginErr.textContent='';
@@ -618,11 +623,29 @@ function setupLogin(){
     if(!code){el.loginErr.textContent='请输入验证码';return;}
     el.loginErr.textContent='登录中…';
     try{
-      const sign=await client.signIn({phoneNumber:el.loginPhone.value.trim(),phoneCodeHash:loginPhoneCodeHash,phoneCode:code});
-      hideLogin();finishLogin(sign);
-    }catch(e){el.loginErr.textContent='登录失败：'+(e&&e.message?e.message:e);}
+      // 两步验证：用 signInWithPassword（gramJS 2.26.22 没有 client.signIn 方法！）
+      if(loginPwMode){
+        const me=await client.signInWithPassword({apiId:API_ID,apiHash:API_HASH},{password:async()=>code,onError:async(err)=>{throw err;}});
+        hideLogin();loginPwMode=false;finishLogin(me);return;
+      }
+      // 直接调原始 API：auth.SignIn（gramJS 2.26.22 的 client.signInUser 是交互式循环，不适合页内表单）
+      const sign=await client.invoke(new Api.auth.SignIn({phoneNumber:el.loginPhone.value.trim(),phoneCodeHash:loginPhoneCodeHash,phoneCode:code}));
+      if(sign instanceof Api.auth.AuthorizationSignUpRequired){
+        el.loginErr.textContent='该手机号尚未注册 Telegram，请先在官方 Telegram 客户端注册后再登录';return;
+      }
+      const me=await client.getMe();
+      hideLogin();finishLogin(me);
+    }catch(e){
+      const em=(e&&e.message)||String(e||'');
+      if(/SESSION_PASSWORD_NEEDED/.test(em)){
+        loginPwMode=true;
+        el.loginErr.textContent='账号开启了两步验证：请在上方输入框中输入你的云密码（不是验证码），再点登录';
+        return;
+      }
+      el.loginErr.textContent='登录失败：'+(e&&e.message?e.message:e);
+    }
   };
-  el.loginBack.onclick=()=>{el.loginStepCode.style.display='none';el.loginStepPhone.style.display='flex';el.loginErr.textContent='';};
+  el.loginBack.onclick=()=>{el.loginStepCode.style.display='none';el.loginStepPhone.style.display='flex';el.loginErr.textContent='';loginPwMode=false;};
   el.loginPhone.addEventListener('keydown',e=>{if(e.key==='Enter')el.loginSend.click();});
   el.loginCode.addEventListener('keydown',e=>{if(e.key==='Enter')el.loginVerify.click();});
 }
