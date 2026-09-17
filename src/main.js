@@ -18,7 +18,7 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ docum
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.17.1';
+const BUILD='v2026.09.17.2';
 console.log('[tg] build', BUILD, '· 修复登录根因：sendCode 参数签名错误(手机号传成了undefined) + client.signIn不存在改用auth.SignIn + 两步验证支持');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
@@ -174,7 +174,7 @@ let selfMe = null;
 const senderCache = new Map();
 const mediaCache = new Map();   // 媒体缓存：key -> blob URL（缩略图 / 完整视频）
 let lazyObserver = null;
-let netdiskView = 'list', currentNetdiskCat = 'all';
+let netdiskView = 'card', currentNetdiskCat = 'all';
 let mediaBrowserView = 'card', currentMediaBrowserType = 'video';
 let oldestId = null, loadingOlder = false;
 let lastFocusVideo = null;      // 当前正在播放/加载的视频消息，用于集中带宽
@@ -273,6 +273,18 @@ function setThumbFallback(node,info){
   node.style.background='var(--tg-attach)';
 }
 function fmtTime(ts){if(!ts)return'';const d=new Date(ts*1000);const p=n=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
+// 取消息所属“天”的键（本地时区），用于跨天判断与分隔条
+function dayKeyOf(ts){if(!ts)return'';const d=new Date(ts*1000);const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;}
+// 仿 Telegram：今天 / 昨天 / 星期 / 月日
+function dayLabel(ts){
+  if(!ts)return'';const d=new Date(ts*1000);const now=new Date();
+  const sod=x=>{const y=new Date(x);y.setHours(0,0,0,0);return y;};
+  const diff=Math.round((sod(now)-sod(d))/86400000);
+  if(diff===0)return'今天';
+  if(diff===1)return'昨天';
+  if(diff>=2&&diff<7)return['周日','周一','周二','周三','周四','周五','周六'][d.getDay()];
+  return `${d.getMonth()+1}月${d.getDate()}日`;
+}
 function chatName(e){if(!e)return'';if(e.className==='User')return [e.firstName,e.lastName].filter(Boolean).join(' ')||e.username||e.phone||'用户';if(e.className==='Channel'||e.className==='Chat')return e.title||'';return'';}
 function isGroup(e){return e && (e.className==='Channel'||e.className==='Chat');}
 // gramJS 频道字段是蛇形 megagroup（非 megaGroup），务必两者都判断，否则超级群组会被误判为"频道"
@@ -901,6 +913,17 @@ async function renderItem(items, prepend){
   foot.innerHTML=`${views}<span class="vf-time">${fmtTime(first.date).split(' ')[1]||''}</span>`;
   bubble.appendChild(foot);
   row.appendChild(bubble);
+  // 仿 Telegram：与上一条（按时间相邻的消息）不是同一天时，插入“今天/昨天/日期”分隔条。
+  // 用相邻节点的 data-day 判断，对“向下追加”和“向上预载旧消息”都正确。
+  const dayKey=dayKeyOf(first.date);
+  row.dataset.day=dayKey;
+  const neighbor=prepend?el.messages.firstChild:el.messages.lastChild;
+  const neighborDay=neighbor&&neighbor.dataset?neighbor.dataset.day:null;
+  if(neighborDay!==dayKey){
+    const sep=document.createElement('div');sep.className='date-sep';sep.dataset.day=dayKey;
+    sep.innerHTML=`<span>${dayLabel(first.date)}</span>`;
+    if(prepend)el.messages.insertBefore(sep,el.messages.firstChild);else el.messages.insertBefore(sep,row);
+  }
   if(prepend)el.messages.insertBefore(row,el.messages.firstChild);else el.messages.appendChild(row);
 }
 
