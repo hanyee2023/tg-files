@@ -18,7 +18,7 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ docum
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.17.2';
+const BUILD='v2026.09.17.3';
 console.log('[tg] build', BUILD, '· 修复登录根因：sendCode 参数签名错误(手机号传成了undefined) + client.signIn不存在改用auth.SignIn + 两步验证支持');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
@@ -174,8 +174,8 @@ let selfMe = null;
 const senderCache = new Map();
 const mediaCache = new Map();   // 媒体缓存：key -> blob URL（缩略图 / 完整视频）
 let lazyObserver = null;
-let netdiskView = 'card', currentNetdiskCat = 'all';
-let mediaBrowserView = 'card', currentMediaBrowserType = 'video';
+let netdiskView = 'list', currentNetdiskCat = 'all';
+let mediaBrowserView = 'list', currentMediaBrowserType = 'video';
 let oldestId = null, loadingOlder = false;
 let lastFocusVideo = null;      // 当前正在播放/加载的视频消息，用于集中带宽
 
@@ -915,15 +915,18 @@ async function renderItem(items, prepend){
   row.appendChild(bubble);
   // 仿 Telegram：与上一条（按时间相邻的消息）不是同一天时，插入“今天/昨天/日期”分隔条。
   // 用相邻节点的 data-day 判断，对“向下追加”和“向上预载旧消息”都正确。
-  const dayKey=dayKeyOf(first.date);
-  row.dataset.day=dayKey;
-  const neighbor=prepend?el.messages.firstChild:el.messages.lastChild;
-  const neighborDay=neighbor&&neighbor.dataset?neighbor.dataset.day:null;
-  if(neighborDay!==dayKey){
-    const sep=document.createElement('div');sep.className='date-sep';sep.dataset.day=dayKey;
-    sep.innerHTML=`<span>${dayLabel(first.date)}</span>`;
-    if(prepend)el.messages.insertBefore(sep,el.messages.firstChild);else el.messages.insertBefore(sep,row);
-  }
+  // 防御：日期分隔仅是视觉辅助，任何异常都绝不能影响消息本身的渲染（否则表现为“内容不显示”）
+  try{
+    const dayKey=dayKeyOf(first.date);
+    row.dataset.day=dayKey;
+    const neighbor=prepend?el.messages.firstChild:el.messages.lastChild;
+    const neighborDay=neighbor&&neighbor.dataset?neighbor.dataset.day:null;
+    if(neighborDay!==dayKey){
+      const sep=document.createElement('div');sep.className='date-sep';sep.dataset.day=dayKey;
+      sep.innerHTML=`<span>${dayLabel(first.date)}</span>`;
+      if(prepend)el.messages.insertBefore(sep,el.messages.firstChild);else el.messages.insertBefore(sep,row);
+    }
+  }catch(e){ console.warn('[tg] 日期分隔插入失败（不影响消息）：',e&&e.message?e.message:e); }
   if(prepend)el.messages.insertBefore(row,el.messages.firstChild);else el.messages.appendChild(row);
 }
 
@@ -1200,7 +1203,7 @@ async function openMediaBrowser(type){
   if(!currentEntity)return;
   currentMediaBrowserType=type;
   el.mediaBrowserTitle.textContent=(type==='video'?'全部视频':type==='image'?'全部图片':type==='gif'?'全部GIF':type==='audio'?'全部音频':'全部文件');
-  el.mediaBrowserGrid.className=mediaBrowserView==='list'?'list-mode':'';
+  el.mediaBrowserGrid.className='list-mode';
   el.mediaBrowserGrid.innerHTML='<div class="loading-spinner"></div>';
   el.mediaBrowser.classList.add('open');
   try{
@@ -1229,31 +1232,15 @@ async function openMediaBrowser(type){
     if(!list.length){el.mediaBrowserGrid.innerHTML='<div class="empty-hint">暂无</div>';return;}
     list.forEach((msg,i)=>{
       const info=mediaInfo(msg);
-      if(mediaBrowserView==='list'){
-        const row=document.createElement('div');row.className='nk-row';
-        const th=document.createElement('div');th.className='nk-thumb sm';
-        if(info.type==='video')th.classList.add('play');else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
-        th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;th._entity=currentEntity;
-        const meta=document.createElement('div');meta.className='nk-meta';
-        meta.innerHTML=`<div class="nk-name">${escapeHtml(info.name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
-        row.append(th,meta);row.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser',currentEntity);};
-        el.mediaBrowserGrid.appendChild(row);
-        if(th._thumbMsg)loadThumb(th,msg);
-      }else{
-        const card=document.createElement('div');card.className='mb-card';
-        const titleBar=document.createElement('div');titleBar.className='mb-name-bar';titleBar.textContent=chatName(currentEntity);
-        const th=document.createElement('div');th.className='mb-thumb';
-        if(info.type==='video'||info.type==='gif')th.classList.add('play');
-        th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;th._entity=currentEntity;
-        const footer=document.createElement('div');footer.className='mb-footer';
-        const nm=document.createElement('div');nm.className='mb-name';nm.textContent=info.name;
-        const tm=document.createElement('div');tm.className='mb-time';tm.textContent=msg.date?fmtTime(msg.date).split(' ')[1]:'';
-        footer.append(nm,tm);
-        card.append(titleBar,th,footer);
-        card.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser',currentEntity);};
-        el.mediaBrowserGrid.appendChild(card);
-        loadThumb(th,msg);
-      }
+      const row=document.createElement('div');row.className='nk-row';
+      const th=document.createElement('div');th.className='nk-thumb sm';
+      if(info.type==='video')th.classList.add('play');else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
+      th._thumbMsg=msg;th._cacheKey='mb:'+msg.id;th._entity=currentEntity;
+      const meta=document.createElement('div');meta.className='nk-meta';
+      meta.innerHTML=`<div class="nk-name">${escapeHtml(info.name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
+      row.append(th,meta);row.onclick=()=>{el.mediaBrowser.classList.remove('open');openViewer(list,i,'browser',currentEntity);};
+      el.mediaBrowserGrid.appendChild(row);
+      if(th._thumbMsg)loadThumb(th,msg);
     });
   }catch(e){el.mediaBrowserGrid.innerHTML='<div class="empty-hint">加载失败</div>';}
 }
@@ -1380,9 +1367,7 @@ el.btnEnterNetdisk.onclick=()=>{
 };
 el.btnNetdiskMenu.onclick=()=>{el.netdisk.classList.remove('open');el.settings.classList.add('open');};
 el.netdiskTabs.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;el.netdiskTabs.querySelectorAll('button').forEach(x=>x.classList.remove('sel'));b.classList.add('sel');loadNetdisk(b.dataset.cat);});
-el.btnNetdiskView.onclick=()=>{netdiskView=netdiskView==='card'?'list':'card';renderNetdisk(currentNetdiskCat);};
 $('netdiskSearchInput').addEventListener('input',()=>renderNetdisk(currentNetdiskCat));
-el.btnMediaView.onclick=()=>{mediaBrowserView=mediaBrowserView==='card'?'list':'card';el.btnMediaView.textContent=mediaBrowserView==='card'?'☰ 列表':'▦ 卡片';openMediaBrowser(currentMediaBrowserType);};
 async function loadNetdisk(cat){
   if(!netdiskChannel)return;
   currentNetdiskCat=cat;
@@ -1407,45 +1392,23 @@ function renderNetdisk(cat){
   const q=($('netdiskSearchInput').value||'').trim().toLowerCase();
   let list=cat==='all'?netdiskMediaList:netdiskMediaList.filter(m=>netdiskCategory(m)===cat);
   if(q)list=list.filter(m=>displayName(m).toLowerCase().includes(q));
-  el.netdiskGrid.className=netdiskView==='list'?'list-mode':'nk2';
+  el.netdiskGrid.className='list-mode';
   el.netdiskGrid.innerHTML='';
   if(!list.length){el.netdiskGrid.innerHTML='<div class="empty-hint">'+(q?'未找到匹配的文件':'暂无文件')+'</div>';return;}
   list.forEach((msg,i)=>{
     const info=mediaInfo(msg);
     const name=displayName(msg);
-    if(netdiskView==='list'){
-      const more=document.createElement('button');more.className='nk-act';more.textContent='⋯';more.title='更多';
-      more.onclick=(ev)=>{ev.stopPropagation();openCardMenu(more,msg);};
-      const row=document.createElement('div');row.className='nk-row';
-      const th=document.createElement('div');th.className='nk-thumb sm';
-      th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
-      if(info.type==='video')th.classList.add('play');else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
-      const meta=document.createElement('div');meta.className='nk-meta';
-      meta.innerHTML=`<div class="nk-name">${escapeHtml(name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
-      row.append(th,meta,more);row.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
-      el.netdiskGrid.appendChild(row);
-      loadThumb(th,msg);
-    }else{
-      // 卡片模式（全新 nk2 结构）：方形封面 + 圆角卡片 + 下方文件名 + 右上角操作
-      const card=document.createElement('div');card.className='nk2-card';
-      const th=document.createElement('div');th.className='nk2-thumb';
-      th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
-      if(info.type==='video')th.innerHTML='<span class="nk2-play"></span>';
-      else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
-      const nm=document.createElement('div');nm.className='nk2-name';nm.textContent=name;
-      const more=document.createElement('button');more.className='nk2-more';more.textContent='⋯';more.title='更多';
-      more.onclick=(ev)=>{ev.stopPropagation();openCardMenu(more,msg);};
-      card.append(th,nm,more);card.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
-      el.netdiskGrid.appendChild(card);
-      loadThumb(th,msg);
-    }
-  });
-  // 兜底：渲染后逐个检测封面高度，若 CSS 撑高失效（高度≈0）则用 JS 按宽度显式设像素高
-  requestAnimationFrame(()=>{
-    el.netdiskGrid.querySelectorAll('.nk2-thumb').forEach(t=>{
-      const r=t.getBoundingClientRect();
-      if(r.width>60&&r.height<r.width*0.6)t.style.height=r.width+'px';
-    });
+    const more=document.createElement('button');more.className='nk-act';more.textContent='⋯';more.title='更多';
+    more.onclick=(ev)=>{ev.stopPropagation();openCardMenu(more,msg);};
+    const row=document.createElement('div');row.className='nk-row';
+    const th=document.createElement('div');th.className='nk-thumb sm';
+    th._thumbMsg=msg;th._cacheKey=netdiskChannel.id+':'+msg.id;th._entity=netdiskChannel;
+    if(info.type==='video')th.classList.add('play');else if(info.type!=='image'&&info.type!=='gif')th.innerHTML=ICONS.file;
+    const meta=document.createElement('div');meta.className='nk-meta';
+    meta.innerHTML=`<div class="nk-name">${escapeHtml(name)}</div><div class="nk-sub">${info.type} · ${fmtSize(info.size)}</div>`;
+    row.append(th,meta,more);row.onclick=()=>openViewer(list,i,'netdisk',netdiskChannel);
+    el.netdiskGrid.appendChild(row);
+    loadThumb(th,msg);
   });
 }
 // 卡片「⋯」弹出菜单：下载 / 重命名 / 分享 / 删除
