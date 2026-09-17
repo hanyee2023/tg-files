@@ -18,7 +18,7 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ docum
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.17.3';
+const BUILD='v2026.09.18.1';
 console.log('[tg] build', BUILD, '· 修复登录根因：sendCode 参数签名错误(手机号传成了undefined) + client.signIn不存在改用auth.SignIn + 两步验证支持');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
@@ -283,7 +283,8 @@ function dayLabel(ts){
   if(diff===0)return'今天';
   if(diff===1)return'昨天';
   if(diff>=2&&diff<7)return['周日','周一','周二','周三','周四','周五','周六'][d.getDay()];
-  return `${d.getMonth()+1}月${d.getDate()}日`;
+  if(d.getFullYear()===now.getFullYear())return `${d.getMonth()+1}月${d.getDate()}日`;
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
 }
 function chatName(e){if(!e)return'';if(e.className==='User')return [e.firstName,e.lastName].filter(Boolean).join(' ')||e.username||e.phone||'用户';if(e.className==='Channel'||e.className==='Chat')return e.title||'';return'';}
 function isGroup(e){return e && (e.className==='Channel'||e.className==='Chat');}
@@ -775,7 +776,7 @@ async function loadMessages(){
   // 单条消息渲染失败（个别异常消息/无权限）不应拖垮整页；逐条守卫
   const tryOnce=async()=>{
     const msgs=await client.getMessages(currentEntity,{limit:40});
-    el.messages.innerHTML='';currentMediaList=[];
+    el.messages.innerHTML='';currentMediaList=[];newMsgCount=0;refreshScrollBtn();
     let ok=0;
     for(const m of msgs.reverse()){
       try{ await appendMessage(m,false); ok++; }
@@ -826,7 +827,20 @@ async function loadOlder(){
   }
   loadingOlder=false;
 }
-el.messages.addEventListener('scroll',()=>{ if(el.messages.scrollTop<60) loadOlder(); });
+// ===== 回到底部悬浮按钮（Telegram 风格：浏览历史时左下角出现，带未读计数）=====
+let newMsgCount=0;let _sbBtn=null;
+function scrollBottomBtn(){ return _sbBtn||(_sbBtn=document.getElementById('btnScrollBottom')); }
+function isAtBottom(){ return el.messages.scrollHeight-el.messages.scrollTop-el.messages.clientHeight<80; }
+function refreshScrollBtn(){
+  const btn=scrollBottomBtn(); if(!btn)return;
+  if(isAtBottom()){ newMsgCount=0; btn.classList.remove('show','has-new'); return; }
+  btn.classList.add('show');
+  if(newMsgCount>0){ btn.classList.add('has-new'); const b=btn.querySelector('.badge'); if(b)b.textContent=newMsgCount>99?'99+':String(newMsgCount); }
+  else btn.classList.remove('has-new');
+}
+el.messages.addEventListener('scroll',()=>{ if(el.messages.scrollTop<60) loadOlder(); refreshScrollBtn(); });
+const _sb=scrollBottomBtn();
+if(_sb)_sb.addEventListener('click',()=>{ newMsgCount=0; el.messages.scrollTo({top:el.messages.scrollHeight,behavior:'smooth'}); refreshScrollBtn(); });
 
 // ===== 渲染单条消息 =====
 // 一条消息含多条媒体（相册）时合并为一张拼图卡
@@ -913,21 +927,32 @@ async function renderItem(items, prepend){
   foot.innerHTML=`${views}<span class="vf-time">${fmtTime(first.date).split(' ')[1]||''}</span>`;
   bubble.appendChild(foot);
   row.appendChild(bubble);
-  // 仿 Telegram：与上一条（按时间相邻的消息）不是同一天时，插入“今天/昨天/日期”分隔条。
-  // 用相邻节点的 data-day 判断，对“向下追加”和“向上预载旧消息”都正确。
-  // 防御：日期分隔仅是视觉辅助，任何异常都绝不能影响消息本身的渲染（否则表现为“内容不显示”）
+  // 仿 Telegram：与“相邻已渲染消息”不是同一天时，在当天第一条消息上方插入“今天/昨天/日期”分隔条。
+  // 关键修复：prepend（向上浏览历史）模式下，原代码先 insertBefore(firstChild) 插 sep、再插 row，
+  // 导致 row 被推到 sep 之上 —— 分隔条被压到消息下方、跨天还会堆叠，这正是“日期对不上 / 自建频道没分隔”的根因。
+  // 现改为：先放消息、再把 sep 压到消息之上；并改用 first/lastElementChild 跳过文本/空白节点更稳健。
+  // 防御：日期分隔仅是视觉辅助，任何异常都绝不能影响消息本身渲染（否则表现为“内容不显示”）
   try{
     const dayKey=dayKeyOf(first.date);
     row.dataset.day=dayKey;
-    const neighbor=prepend?el.messages.firstChild:el.messages.lastChild;
+    const neighbor=prepend?el.messages.firstElementChild:el.messages.lastElementChild;
     const neighborDay=neighbor&&neighbor.dataset?neighbor.dataset.day:null;
+    let sep=null;
     if(neighborDay!==dayKey){
-      const sep=document.createElement('div');sep.className='date-sep';sep.dataset.day=dayKey;
+      sep=document.createElement('div');sep.className='date-sep';sep.dataset.day=dayKey;
       sep.innerHTML=`<span>${dayLabel(first.date)}</span>`;
-      if(prepend)el.messages.insertBefore(sep,el.messages.firstChild);else el.messages.insertBefore(sep,row);
     }
-  }catch(e){ console.warn('[tg] 日期分隔插入失败（不影响消息）：',e&&e.message?e.message:e); }
-  if(prepend)el.messages.insertBefore(row,el.messages.firstChild);else el.messages.appendChild(row);
+    if(prepend){
+      el.messages.insertBefore(row, el.messages.firstChild);   // 消息先置顶
+      if(sep)el.messages.insertBefore(sep, row);              // 分隔条压到消息之上
+    }else{
+      if(sep)el.messages.insertBefore(sep, row);              // 分隔条在消息之上
+      el.messages.appendChild(row);                           // 消息置底
+    }
+  }catch(e){
+    console.warn('[tg] 日期分隔插入失败（不影响消息）：',e&&e.message?e.message:e);
+    try{ if(prepend)el.messages.insertBefore(row,el.messages.firstChild); else el.messages.appendChild(row); }catch(_){}
+  }
 }
 
 // 点击：播放 / 操作 / 查看器
@@ -1461,7 +1486,12 @@ el.netdiskFileInput.addEventListener('change',async(e)=>{
 // ===== 实时消息 =====
 async function onNewMessage(event){
   const msg=event.message;if(!msg||!msg.message&&!msg.media)return;
-  if(currentEntity&&msg.chat&&msg.chat.id===currentEntity.id){await appendMessage(msg,false);flushAlbum(false);el.messages.scrollTop=el.messages.scrollHeight;}
+  if(currentEntity&&msg.chat&&msg.chat.id===currentEntity.id){
+    const wasBottom=isAtBottom();
+    await appendMessage(msg,false);flushAlbum(false);
+    if(wasBottom)el.messages.scrollTop=el.messages.scrollHeight; else newMsgCount++;
+    refreshScrollBtn();
+  }
   if(netdiskChannel&&msg.chat&&msg.chat.id===netdiskChannel.id){if(mediaInfo(msg)){netdiskMediaList.unshift(msg);renderNetdisk(el.netdiskTabs.querySelector('.sel').dataset.cat);}}
 }
 
