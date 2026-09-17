@@ -18,7 +18,7 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ docum
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.16.16';
+const BUILD='v2026.09.17.1';
 console.log('[tg] build', BUILD, '· 修复登录根因：sendCode 参数签名错误(手机号传成了undefined) + client.signIn不存在改用auth.SignIn + 两步验证支持');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
@@ -42,10 +42,14 @@ function _syncCfg(){
   try{ const t=document.getElementById('buildTag'); if(t)t.textContent='build '+BUILD+' · API:'+(API_ID?'✓':'✗')+' 代理:'+(PROXY_DOMAIN?PROXY_DOMAIN.slice(0,18):'未设'); }catch(e){}
 }
 _syncCfg();
-// 左下角可点击版本号（构建版本 + 配置状态），点击显示环境诊断（只读，不再弹输入框）
+// 设置栏底部可点击版本号（构建版本 + 配置状态），点击显示环境诊断（只读，不再弹输入框）
 try{
   let t=document.getElementById('buildTag');
-  if(!t){ t=document.createElement('div'); t.id='buildTag'; document.body.appendChild(t); }
+  if(!t){ // 兜底：动态插到设置面板底部
+    const pb=document.querySelector('#settings .panel-body');
+    t=document.createElement('div'); t.id='buildTag';
+    if(pb) pb.appendChild(t); else document.body.appendChild(t);
+  }
   t.style.pointerEvents='auto'; t.style.cursor='pointer';
   t.onclick=function(){showEnvMissing(true);};
   _syncCfg();
@@ -1053,12 +1057,29 @@ async function deleteMessage(id){
 
 // ===== 下载 / 分享 =====
 async function downloadMedia(msg,nameOverride){
-  try{const info=mediaInfo(msg);const name=nameOverride||(info?info.name:'file');
-    const buf=await client.downloadMedia(msg);if(!buf||!buf.length){toast('下载为空');return;}
+  try{
+    const info=mediaInfo(msg);const name=nameOverride||(info?info.name:'file');
     const mime=info?info.mime:'application/octet-stream';
-    const url=URL.createObjectURL(new Blob([buf],{type:mime}));
-    const a=document.createElement('a');a.href=url;a.download=name;a.click();
-    setTimeout(()=>URL.revokeObjectURL(url),10000);
+    // 改用分段流下载（复用已验证的 iterDownload 通道），避免一次性把大文件缓冲进内存导致卡死/失败
+    const chunks=[];let got=0;const total=info?info.size:0;
+    toast('开始下载：'+name+(total?(' '+fmtSize(total)):''));
+    const iter=client.iterDownload({file:msg.media,requestSize:524288,msgData:[msg.chat,msg.id]});
+    for await(const chunk of iter){ chunks.push(chunk); got+=chunk.length; }
+    if(!chunks.length){toast('下载为空');return;}
+    const url=URL.createObjectURL(new Blob(chunks,{type:mime}));
+    const a=document.createElement('a');a.href=url;a.download=name;a.style.display='none';
+    document.body.appendChild(a);
+    try{ a.click(); }catch(e){}
+    document.body.removeChild(a);
+    // iOS Safari 等对环境对 blob 的 download 属性支持不佳：兜底在新标签页打开，便于长按保存
+    setTimeout(()=>{
+      try{
+        const ua=navigator.userAgent||'';
+        if(/iP(ad|hone|od)/.test(ua)) window.open(url,'_blank');
+      }catch(e){}
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+    },500);
+    toast('下载完成：'+name);
   }catch(e){toast('下载失败：'+e.message);}
 }
 async function shareMedia(msg,nameOverride){
