@@ -18,7 +18,7 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ docum
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.18.1';
+const BUILD='v2026.09.18.2';
 console.log('[tg] build', BUILD, '· 修复登录根因：sendCode 参数签名错误(手机号传成了undefined) + client.signIn不存在改用auth.SignIn + 两步验证支持');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
@@ -129,7 +129,7 @@ const _elRaw = {
   fileInput: $('fileInput'), btnBack: $('btnBack'),
   btnMenu: $('btnMenu'), btnChatMenu: $('btnChatMenu'), btnSettingsClose: $('btnSettingsClose'),
   settings: $('settings'), accAvatar: $('accAvatar'), accName: $('accName'), accSub: $('accSub'),
-  segTheme: $('segTheme'), segAccent: $('segAccent'),
+  segAccent: $('segAccent'),
   netdiskSelect: $('netdiskSelect'), btnEnterNetdisk: $('btnEnterNetdisk'), btnLogout: $('btnLogout'),
   bgFileInput: $('bgFileInput'), btnBgImage: $('btnBgImage'), btnBgReset: $('btnBgReset'),
   netdisk: $('netdisk'), netdiskTabs: $('netdiskTabs'), netdiskGrid: $('netdiskGrid'),
@@ -275,15 +275,9 @@ function setThumbFallback(node,info){
 function fmtTime(ts){if(!ts)return'';const d=new Date(ts*1000);const p=n=>String(n).padStart(2,'0');return `${p(d.getMonth()+1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;}
 // 取消息所属“天”的键（本地时区），用于跨天判断与分隔条
 function dayKeyOf(ts){if(!ts)return'';const d=new Date(ts*1000);const p=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;}
-// 仿 Telegram：今天 / 昨天 / 星期 / 月日
+// 日期分隔标签：按需求显示完整日期（xx年xx月xx日），不使用“今天/周X”
 function dayLabel(ts){
-  if(!ts)return'';const d=new Date(ts*1000);const now=new Date();
-  const sod=x=>{const y=new Date(x);y.setHours(0,0,0,0);return y;};
-  const diff=Math.round((sod(now)-sod(d))/86400000);
-  if(diff===0)return'今天';
-  if(diff===1)return'昨天';
-  if(diff>=2&&diff<7)return['周日','周一','周二','周三','周四','周五','周六'][d.getDay()];
-  if(d.getFullYear()===now.getFullYear())return `${d.getMonth()+1}月${d.getDate()}日`;
+  if(!ts)return'';const d=new Date(ts*1000);
   return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
 }
 function chatName(e){if(!e)return'';if(e.className==='User')return [e.firstName,e.lastName].filter(Boolean).join(' ')||e.username||e.phone||'用户';if(e.className==='Channel'||e.className==='Chat')return e.title||'';return'';}
@@ -329,8 +323,8 @@ function displayName(msg){
 
 // ===== 主题 =====
 function applyTheme(){const t=sGet('tg_theme')||'light';const a=sGet('tg_accent')||'blue';document.documentElement.setAttribute('data-theme',t);document.documentElement.setAttribute('data-accent',a);
-  el.segTheme.querySelectorAll('button').forEach(b=>b.classList.toggle('sel',b.dataset.v===t));
-  el.segAccent.querySelectorAll('button').forEach(b=>b.classList.toggle('sel',b.dataset.v===a));}
+  const chk=document.getElementById('chkDark'); if(chk)chk.checked=(t==='dark');
+  const sa=document.getElementById('segAccent'); if(sa)sa.querySelectorAll('button').forEach(b=>b.classList.toggle('sel',b.dataset.v===a));}
 
 // ===== 自定义聊天背景 =====
 function applyChatBg(){
@@ -1108,30 +1102,30 @@ async function deleteMessage(id){
 
 // ===== 下载 / 分享 =====
 async function downloadMedia(msg,nameOverride){
+  const dl=document.getElementById('dlToast');
+  const setDl=(pct,txt)=>{ if(!dl)return; dl.classList.add('show'); dl.querySelector('.dl-name').textContent=txt; dl.querySelector('.dl-pct').textContent=Math.round(pct)+'%'; dl.querySelector('.dl-bar > i').style.width=pct+'%'; };
   try{
     const info=mediaInfo(msg);const name=nameOverride||(info?info.name:'file');
     const mime=info?info.mime:'application/octet-stream';
-    // 改用分段流下载（复用已验证的 iterDownload 通道），避免一次性把大文件缓冲进内存导致卡死/失败
+    // 分段流下载（复用已验证的 iterDownload 通道），边下边更新底部进度条，避免一次性缓冲大文件卡死/失败
     const chunks=[];let got=0;const total=info?info.size:0;
-    toast('开始下载：'+name+(total?(' '+fmtSize(total)):''));
+    setDl(0,'开始下载：'+name);
     const iter=client.iterDownload({file:msg.media,requestSize:524288,msgData:[msg.chat,msg.id]});
-    for await(const chunk of iter){ chunks.push(chunk); got+=chunk.length; }
-    if(!chunks.length){toast('下载为空');return;}
+    for await(const chunk of iter){ chunks.push(chunk); got+=chunk.length; setDl(total?got/total*100:0,name); }
+    if(!chunks.length){ if(dl)dl.classList.remove('show'); toast('下载为空'); return; }
     const url=URL.createObjectURL(new Blob(chunks,{type:mime}));
     const a=document.createElement('a');a.href=url;a.download=name;a.style.display='none';
     document.body.appendChild(a);
     try{ a.click(); }catch(e){}
     document.body.removeChild(a);
-    // iOS Safari 等对环境对 blob 的 download 属性支持不佳：兜底在新标签页打开，便于长按保存
-    setTimeout(()=>{
-      try{
-        const ua=navigator.userAgent||'';
-        if(/iP(ad|hone|od)/.test(ua)) window.open(url,'_blank');
-      }catch(e){}
-      setTimeout(()=>URL.revokeObjectURL(url),60000);
-    },500);
+    // 设置中开启“下载后自动打开”则新标签页打开（手机可直接预览/长按保存）；iOS 兜底打开
+    if(sGet('tg_autoopen')==='1'){ try{ window.open(url,'_blank'); }catch(e){} }
+    else { try{ const ua=navigator.userAgent||''; if(/iP(ad|hone|od)/.test(ua)) window.open(url,'_blank'); }catch(e){} }
+    setDl(100,name);
+    setTimeout(()=>{ if(dl)dl.classList.remove('show'); },1600);
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
     toast('下载完成：'+name);
-  }catch(e){toast('下载失败：'+e.message);}
+  }catch(e){ if(dl)dl.classList.remove('show'); toast('下载失败：'+e.message); }
 }
 async function shareMedia(msg,nameOverride){
   const info=mediaInfo(msg);const name=nameOverride||(info?info.name:'文件');
@@ -1366,8 +1360,15 @@ async function deleteChat(entity){if(!confirm('确定删除该对话？'))return
 // ===== 设置面板（左侧）=====
 el.btnMenu.onclick=()=>el.settings.classList.add('open');
 el.btnSettingsClose.onclick=()=>el.settings.classList.remove('open');
-el.segTheme.querySelectorAll('button').forEach(b=>b.onclick=()=>{sSet('tg_theme',b.dataset.v);applyTheme();});
 el.segAccent.querySelectorAll('button').forEach(b=>b.onclick=()=>{sSet('tg_accent',b.dataset.v);applyTheme();});
+const chkDark=document.getElementById('chkDark');
+if(chkDark)chkDark.onchange=()=>{sSet('tg_theme',chkDark.checked?'dark':'light');applyTheme();};
+const chkAutoOpen=document.getElementById('chkAutoOpen');
+if(chkAutoOpen){ chkAutoOpen.checked=(sGet('tg_autoopen')==='1'); chkAutoOpen.onchange=()=>sSet('tg_autoopen',chkAutoOpen.checked?'1':'0'); }
+// 设置面板：滚动时账号头部紧凑化（更贴合移动端）
+const accHeader=document.getElementById('accountHeader');
+const panelBody=document.querySelector('#settings .panel-body');
+if(accHeader&&panelBody)panelBody.addEventListener('scroll',()=>accHeader.classList.toggle('compact',panelBody.scrollTop>10));
 document.querySelectorAll('.bg-swatch').forEach(s=>s.onclick=()=>{sSet('tg_chat_bg',JSON.stringify({type:'color',value:s.dataset.bg}));applyChatBg();});
 el.btnBgImage.onclick=()=>el.bgFileInput.click();
 el.bgFileInput.onchange=async(e)=>{const f=e.target.files[0];if(!f)return;const url=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(f);});sSet('tg_chat_bg',JSON.stringify({type:'image',value:url}));applyChatBg();e.target.value='';};
@@ -1420,9 +1421,17 @@ function renderNetdisk(cat){
   el.netdiskGrid.className='list-mode';
   el.netdiskGrid.innerHTML='';
   if(!list.length){el.netdiskGrid.innerHTML='<div class="empty-hint">'+(q?'未找到匹配的文件':'暂无文件')+'</div>';return;}
+  let lastDayKey='';
   list.forEach((msg,i)=>{
     const info=mediaInfo(msg);
     const name=displayName(msg);
+    // 网盘列表按天分组：当天首条消息前插入“xx年xx月xx日”分隔条（聊天视图已有，这里补齐自建频道场景）
+    const dayKey=dayKeyOf(msg.date);
+    if(dayKey && dayKey!==lastDayKey){
+      const sep=document.createElement('div');sep.className='date-sep';sep.innerHTML=`<span>${dayLabel(msg.date)}</span>`;
+      el.netdiskGrid.appendChild(sep);
+      lastDayKey=dayKey;
+    }
     const more=document.createElement('button');more.className='nk-act';more.textContent='⋯';more.title='更多';
     more.onclick=(ev)=>{ev.stopPropagation();openCardMenu(more,msg);};
     const row=document.createElement('div');row.className='nk-row';
