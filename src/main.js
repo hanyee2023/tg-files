@@ -18,7 +18,7 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ docum
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.18.2';
+const BUILD='v2026.09.23.1';
 console.log('[tg] build', BUILD, '· 修复登录根因：sendCode 参数签名错误(手机号传成了undefined) + client.signIn不存在改用auth.SignIn + 两步验证支持');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
@@ -852,13 +852,17 @@ async function appendMessage(msg, prepend){
 }
 function flushAlbum(prepend){
   if(!pendingAlbum)return;
-  const items=pendingAlbum.msgs; pendingAlbum=null;
+  const items=pendingAlbum.msgs.filter(Boolean); pendingAlbum=null;
+  if(!items.length)return;
   renderItem(items, prepend);
 }
 async function renderItem(items, prepend){
+  // 防御：相册 flush 偶发空项 / 消息为 null，避免在读取 first.out/first.id 时整条崩溃
+  if(!items||!items.length)return;
   const first=items[0];
+  if(!first)return;
   const row=document.createElement('div');row.className='row '+(first.out?'out':'in');
-  const bubble=document.createElement('div');bubble.className='msg';bubble.dataset.id=first.id;
+  const bubble=document.createElement('div');bubble.className='msg';bubble.dataset.id=first.id||'';
   const grp=isGroup(currentEntity);
   if(!first.out&&grp){
     const s=await getSender(first);
@@ -1373,6 +1377,8 @@ document.querySelectorAll('.bg-swatch').forEach(s=>s.onclick=()=>{sSet('tg_chat_
 el.btnBgImage.onclick=()=>el.bgFileInput.click();
 el.bgFileInput.onchange=async(e)=>{const f=e.target.files[0];if(!f)return;const url=await new Promise(r=>{const fr=new FileReader();fr.onload=()=>r(fr.result);fr.readAsDataURL(f);});sSet('tg_chat_bg',JSON.stringify({type:'image',value:url}));applyChatBg();e.target.value='';};
 el.btnBgReset.onclick=()=>{sDel('tg_chat_bg');applyChatBg();};
+const btnErrClear=document.getElementById('btnErrClear');
+if(btnErrClear)btnErrClear.onclick=()=>{const l=document.getElementById('errReportList');if(l)l.innerHTML='';window.__errLog=[];const b=document.getElementById('errBadge');if(b)b.style.display='none';};
 el.btnLogout.onclick=()=>{if(confirm('退出登录将清除本地登录态')){sDel('tg_session');sDel('tg_self');location.reload();}};
 
 // ===== 网盘（全屏）=====
