@@ -43,8 +43,9 @@
   #details{width:320px;min-width:320px;display:none;flex-direction:column;background:var(--tg-panel);border-left:1px solid var(--tg-border);}
   @media(min-width:900px){ #details{display:flex;} }
 
-  .icon-btn{width:40px;height:40px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:var(--tg-sub);transition:.15s;flex:0 0 auto;}
+  .icon-btn{width:40px;height:40px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;color:var(--tg-sub);transition:.15s;flex:0 0 auto;position:relative;}
   .icon-btn:hover{background:var(--tg-hover);color:var(--tg-blue);}
+  .badge-dot{position:absolute;top:1px;right:1px;min-width:16px;height:16px;padding:0 4px;background:var(--tg-danger);color:#fff;border-radius:9px;font-size:10px;font-weight:600;display:none;align-items:center;justify-content:center;line-height:1;border:2px solid var(--tg-panel);}
   .icon-btn svg{width:22px;height:22px;}
 
   /* 头部 */
@@ -398,6 +399,13 @@
   #accountHeader.compact{padding:8px 16px;}
   #accountHeader.compact .avatar{width:38px;height:38px;font-size:15px;}
   #accountHeader.compact .a-name{font-size:15px;}
+  /* 错误报告列表 */
+  .err-list{max-height:260px;overflow-y:auto;padding:2px 16px 10px;}
+  .err-item{border-top:1px solid var(--tg-border);padding:8px 0;}
+  .err-item:first-child{border-top:none;}
+  .err-time{font-size:11px;color:var(--tg-sub);font-variant-numeric:tabular-nums;}
+  .err-title{font-size:13px;color:var(--tg-danger);font-weight:600;margin:2px 0 4px;}
+  .err-detail{white-space:pre-wrap;word-break:break-word;font-size:11px;color:var(--tg-sub);margin:0;font-family:monospace;line-height:1.5;max-height:150px;overflow:auto;}
   /* 网盘列表：移动端防横向溢出 */
   #netdiskGrid{overflow-x:hidden;}
   .nk-row{width:100%;}
@@ -418,24 +426,27 @@
   <script>
   // 全局错误捕获：任何加载/运行错误都会显示到底部红条，避免"一片空白"无从排查
   (function(){
-    function showFatal(title, detail){
+    // 错误统一写入设置侧边栏「错误报告」（带时间），不再用阻塞式红条
+    window.__errLog=window.__errLog||[];
+    function reportError(title, detail){
       try{
-        var d=document.getElementById('__fatal');
-        if(!d){
-          d=document.createElement('div');d.id='__fatal';
-          d.style.cssText='position:fixed;left:0;right:0;bottom:0;background:#e8513e;color:#fff;font-size:12px;line-height:1.5;padding:10px 12px;z-index:99999;white-space:pre-wrap;box-shadow:0 -2px 8px rgba(0,0,0,.2);max-height:40vh;overflow:auto;font-family:monospace;';
-          d.onclick=function(ev){if(ev.target&&ev.target.tagName==='BUTTON')return;this.style.maxHeight=this.style.maxHeight==='none'?'40vh':'none';};
-          document.body.appendChild(d);
+        var ts=new Date().toLocaleString();
+        window.__errLog.push({ts:ts,title:title,detail:detail||''});
+        if(window.__errLog.length>100)window.__errLog.shift();
+        var list=document.getElementById('errReportList');
+        if(list){
+          var item=document.createElement('div');item.className='err-item';
+          item.innerHTML='<div class="err-time">'+escapeHtml(ts)+'</div>'
+            +'<div class="err-title">⚠ '+escapeHtml(title)+'</div>'
+            +'<pre class="err-detail">'+escapeHtml(detail||'')+'</pre>';
+          list.insertBefore(item, list.firstChild);
+          while(list.children.length>60)list.removeChild(list.lastChild);
         }
-        var cfg=window.__CFG||{};
-        var cfgLine='\n\n[配置] build='+cfg.build+' API='+(cfg.api?'已填':'缺失')+' HASH='+(cfg.hash?'已填':'缺失')+' 代理='+cfg.proxy;
-        d.innerHTML='<b>⚠ '+escapeHtml(title)+'</b> （点空白展开/折叠；<button id="__copy">复制</button> 发开发者）\n'
-          +(detail||'').split('\n').map(function(l){return escapeHtml(l);}).join('\n')
-          +escapeHtml(cfgLine);
-        var cp=document.getElementById('__copy');
-        if(cp)cp.onclick=function(e){e.stopPropagation();try{navigator.clipboard.writeText(d.innerText);}catch(e){}};
-      }catch(e){console.error('fatal',e);}
+        var badge=document.getElementById('errBadge');
+        if(badge){ badge.style.display='flex'; badge.textContent=String(window.__errLog.length); }
+      }catch(e){ console.error('reportError fail',e); }
     }
+    window.__reportError=reportError;
     function escapeHtml(s){return String(s||'').replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]);});}
     function describeError(err){
       if(err==null)return'null';
@@ -483,18 +494,18 @@
       var err=e&&e.error?e.error:e;
       var msg=describeError(err);
       if(e&&e.filename&&!msg.includes('文件:'))msg='文件: '+e.filename+':'+(e.lineno||'?')+':'+(e.colno||'?')+'\n'+msg;
-      showFatal('运行错误', msg || '未知错误');
+      reportError('运行错误', msg || '未知错误');
     },true);
     window.addEventListener('unhandledrejection',function(e){
       var r=e&&e.reason;
-      showFatal('未处理 Promise 错误', describeError(r));
+      reportError('未处理 Promise 错误', describeError(r));
     });
     // 自检：6 秒后主脚本仍未运行（window.__CFG 不存在）→ 说明 JS 加载失败。
     // 最常见原因：手机缓存了旧版 index.html，引用的旧 hash JS 已被新部署删除（404）。
     // 给出明确操作指引，替代令人困惑的"空白/报错"。
     setTimeout(function(){
       if(window.__CFG)return;
-      showFatal('脚本加载失败（页面已过时）',
+      reportError('脚本加载失败（页面已过时）',
         '当前页面是旧缓存，它引用的 JS 文件在新部署中已不存在。\n'
         +'请按顺序尝试：\n'
         +'1. 下拉刷新本页 2~3 次\n'
@@ -507,9 +518,10 @@
   <div id="app">
     <aside id="sidebar">
       <div id="sidebarHeader">
-        <button id="btnMenu" class="icon-btn" title="菜单">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
-        </button>
+      <button id="btnMenu" class="icon-btn" title="菜单">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+        <span class="badge-dot" id="errBadge"></span>
+      </button>
         <div id="searchWrap">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           <input id="searchInput" placeholder="搜索" autocomplete="off">
@@ -619,10 +631,13 @@
         <span class="label">下载后自动打开</span>
         <label class="switch"><input type="checkbox" id="chkAutoOpen"><span class="slider"></span></label>
       </div>
-      <div class="opt col">
-        <div class="opt-line"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1"/></svg></span><span class="label">下载说明</span></div>
-        <div class="hint-text">文件通过浏览器自带下载管理器保存（手机在「下载」目录）。下载进度显示在底部进度条，可在聊天 / 网盘的「⋯ → 下载」触发。</div>
+      <div class="section-title">错误报告</div>
+      <div class="opt">
+        <span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg></span>
+        <span class="label">运行错误日志</span>
+        <span class="bg-file" id="btnErrClear">清空</span>
       </div>
+      <div class="err-list" id="errReportList"></div>
       <div class="section-title">网盘模式</div>
       <div class="opt col">
         <div class="opt-line"><span class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span><span class="label">选择频道作为网盘</span></div>
