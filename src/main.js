@@ -18,8 +18,8 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ docum
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.09.23.1';
-console.log('[tg] build', BUILD, '· 修复登录根因：sendCode 参数签名错误(手机号传成了undefined) + client.signIn不存在改用auth.SignIn + 两步验证支持');
+const BUILD='v2026.10.29.1';
+console.log('[tg] build', BUILD, '· 大视频上传修复(File直传,>20MB不再失败) + 上传/下载可取消 + 边下边播(头部1.5MB开播,每8MB无缝续源) + 播放按钮SVG统一 + 网盘下载走系统分享');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
 function _readCfg(){
@@ -204,21 +204,25 @@ function _pumpDownloads(){
   const {task,resolve,reject}=_dlQueue.shift();
   Promise.resolve().then(task).then(resolve,e=>reject(e)).finally(()=>{_dlRunning=false;_pumpDownloads();});
 }
-// ===== 准流式播放：分段下载视频，头部(约1.5MB)到达立即开播，其余后台续传，完成后无缝换源 =====
+// ===== 准流式播放：分段下载视频，头部(约1.5MB)到达立即开播，之后每多下 8MB 再无缝换源续播，
+// 直到全量完成换最终源。此前只在头部换源一次，moov 在尾部的视频头部无法解码会一直黑屏到全量下完，
+// 表现为"整个视频下载完成后才会播放"。换源时消费方需恢复播放位置（见 playVideo / renderViewer）。
 const STREAM_HEAD=1.5*1024*1024;
+const STREAM_STEP=8*1024*1024;
 async function streamVideo(msg,entity,{isStale,onProgress,onPartial,onFull,onError}){
   streamHold=true;
   try{
     const iter=client.iterDownload({file:msg.media,requestSize:524288,msgData:[entity,msg.id]});
-    const chunks=[];let got=0;let partialDone=false;let stale=false;
+    const chunks=[];let got=0;let nextSwap=STREAM_HEAD;let stale=false;
     const info=mediaInfo(msg);const mime=(info&&info.mime)||'video/mp4';
     const total=info?info.size:0;
     for await(const chunk of iter){
       if(isStale()){stale=true;try{await iter.close();}catch(e){}break;}
       chunks.push(chunk);got+=chunk.length;
       if(onProgress)onProgress(total?got/total:0,got);
-      if(!partialDone&&got>=STREAM_HEAD&&total-got>262144){
-        partialDone=true;
+      // 头部到达先开播；之后每累计 STREAM_STEP 再换一次源（临近结尾不换，直接等全量）
+      if(got>=nextSwap&&total-got>262144){
+        nextSwap=got+STREAM_STEP;
         if(onPartial)onPartial(new Blob(chunks,{type:mime}),got);
       }
     }
@@ -249,6 +253,8 @@ const ICONS = {
   users: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   volume: '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
   mute: '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><line x1="17" y1="9" x2="23" y2="15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="#fff"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>',
+  replay: '<svg viewBox="0 0 24 24" fill="#fff"><path d="M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/></svg>',
   reply: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 17l-5-5 5-5"/><path d="M4 12h11a5 5 0 0 1 0 10h-3"/></svg>',
 };
 function escapeHtml(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
@@ -991,7 +997,7 @@ async function playVideo(host,msg,entity){
   const ctrl=document.createElement('div');ctrl.className='vp-controls';
   const left=document.createElement('div');left.className='vp-left';
   const playBtn=document.createElement('button');playBtn.className='vp-play';
-  playBtn.innerHTML=`<span class="vp-icon">▶</span><span class="vp-ring"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="3"/><circle class="vp-ring-cp cp" cx="18" cy="18" r="15" fill="none" stroke-width="3" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg></span>`;
+  playBtn.innerHTML=`<span class="vp-icon">${ICONS.play}</span><span class="vp-ring"><svg viewBox="0 0 36 36"><circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="3"/><circle class="vp-ring-cp cp" cx="18" cy="18" r="15" fill="none" stroke-width="3" stroke-linecap="round" stroke-dasharray="94.2" stroke-dashoffset="94.2" transform="rotate(-90 18 18)"/></svg></span>`;
   left.appendChild(playBtn);
 
   const right=document.createElement('div');right.className='vp-right';
@@ -1008,7 +1014,8 @@ async function playVideo(host,msg,entity){
   function setLoadProgress(p){const t=Math.max(0,Math.min(1,p));cp.style.strokeDashoffset=String(94.2*(1-t));}
   function fmtDur(s){if(!s||!isFinite(s))return '0:00';const m=Math.floor(s/60);const sec=Math.floor(s%60);return m+':'+String(sec).padStart(2,'0');}
   function updateTime(){timeSpan.textContent='-'+fmtDur(Math.max(0,(v.duration||0)-v.currentTime));}
-  function syncIcon(){icon.textContent=v.paused?'▶':'⏸';}
+  // 播放/暂停图标统一用 SVG（与静音/下载等按钮同风格），播放结束显示重播图标
+  function syncIcon(){icon.innerHTML=v.paused?(v.ended?ICONS.replay:ICONS.play):ICONS.pause;}
   async function safePlay(){try{await v.play();}catch(e){
     // 浏览器拒绝有声自动播放时，静音后重试，保证"进度走完即开播"
     if(e&&e.name==='NotAllowedError'){v.muted=true;muteBtn.innerHTML=ICONS.mute;try{await v.play();}catch(_){}}
@@ -1020,22 +1027,30 @@ async function playVideo(host,msg,entity){
   v.onclick=(e)=>{e.stopPropagation();if(v.paused)safePlay();else v.pause();};
   v.addEventListener('play',syncIcon);v.addEventListener('pause',syncIcon);
   v.addEventListener('timeupdate',updateTime);v.addEventListener('loadedmetadata',updateTime);
-  v.addEventListener('ended',()=>{icon.textContent='↻';});
+  v.addEventListener('ended',syncIcon);
 
   if(mediaCache.has(key)){ // 已缓存：直接即播，进度置满
     const url=mediaCache.get(key);v.src=url;setLoadProgress(1);safePlay();return;
   }
-  // 准流式：头部到达即开播（不用等整段下载完），进度环同时显示真实下载进度
+  // 边下边播：头部到达先播，之后每 8MB 无缝换更大的源续播（恢复播放位置），全量完成换最终源
+  let partialUrl=null;
+  const setPartial=(blob)=>{
+    if(lastFocusVideo!==msg)return;
+    const keep=v.currentTime||0;const wasPaused=v.paused;
+    if(partialUrl)URL.revokeObjectURL(partialUrl);
+    partialUrl=URL.createObjectURL(blob);
+    v.src=partialUrl;
+    v.addEventListener('loadedmetadata',()=>{try{v.currentTime=keep;}catch(e){}},{once:true});
+    if(!wasPaused)safePlay();
+  };
   streamVideo(msg,entity,{
     isStale:()=>lastFocusVideo!==msg,
     onProgress:(p)=>{if(lastFocusVideo===msg)setLoadProgress(p);},
-    onPartial:(blob)=>{
-      if(lastFocusVideo!==msg)return;
-      v.src=URL.createObjectURL(blob);safePlay();   // 边下边播：先播已到的部分
-    },
+    onPartial:(blob)=>setPartial(blob),
     onFull:(blob)=>{
       if(lastFocusVideo!==msg)return;
       const url=URL.createObjectURL(blob);mediaCache.set(key,url);
+      if(partialUrl){URL.revokeObjectURL(partialUrl);partialUrl=null;}
       const t=v.currentTime||0;
       v.src=url;v.addEventListener('loadedmetadata',()=>{try{v.currentTime=t;}catch(e){}},{once:true});
       setLoadProgress(1);safePlay();   // 无缝换完整源，播放位置不跳
@@ -1060,38 +1075,51 @@ function makeCircle(){
 }
 function getUploads(){
   let u=document.getElementById('uploads');
-  if(!u){u=document.createElement('div');u.id='uploads';u.style.cssText='position:absolute;left:0;right:0;bottom:64px;display:flex;flex-direction:column;gap:6px;padding:0 12px;z-index:6;pointer-events:none;';document.getElementById('chat').appendChild(u);}
+  if(!u){u=document.createElement('div');u.id='uploads';u.style.cssText='position:absolute;left:0;right:0;bottom:56px;display:flex;flex-direction:column;gap:6px;padding:0 12px;z-index:6;pointer-events:none;';document.getElementById('chat').appendChild(u);}
   return u;
+}
+// ===== 统一上传：带进度圆环 + 取消按钮 =====
+// 关键修复（大视频上传失败根因）：gramJS 的 getFileBuffer 对 >20MB 的 CustomFile 会改走
+// filePath（Node 文件系统路径），在浏览器里必然抛错 —— 所以之前超过 20MB 的视频一律上传失败。
+// 浏览器原生 File 对象 gramJS 全程支持（走 Response(file).arrayBuffer() 分片），任意大小均可上传。
+// 取消实现：gramJS 原生支持 progressCallback.isCanceled=true → 抛 USER_CANCELED 干净终止。
+async function uploadFileWithProgress(f,entity){
+  const isImage=/^image\//.test(f.type||'');
+  const isVideo=/^video\//.test(f.type||'');
+  const card=document.createElement('div');card.className='up-card';card.style.pointerEvents='auto';
+  const circ=makeCircle();
+  const name=document.createElement('div');name.className='up-name';name.textContent=f.name;
+  const cancelBtn=document.createElement('button');cancelBtn.className='up-cancel';cancelBtn.title='取消上传';cancelBtn.innerHTML='✕';
+  card.append(circ.el,name,cancelBtn);getUploads().appendChild(card);
+  const opts={file:f,progressCallback:p=>circ.set(p)};
+  if(isVideo){opts.mimeType=f.type||'video/mp4';opts.supportsStreaming=true;}
+  else if(isImage){opts.mimeType=f.type;}
+  else {opts.forceDocument=true;}
+  let canceled=false;
+  cancelBtn.onclick=()=>{canceled=true;opts.progressCallback.isCanceled=true;cancelBtn.textContent='…';toast('正在取消上传…');};
+  try{
+    const m=await client.sendFile(entity,opts);
+    card.remove();return m;
+  }catch(err){
+    card.remove();
+    if(canceled||/USER_CANCELED/.test((err&&err.message)||'')){toast('已取消上传');return null;}
+    console.warn('[tg] 上传失败，回退文件形式重发：',err);
+    // 回退：改为文件形式重发一次（换新的进度回调，取消标记不复用）
+    try{
+      const m2=await client.sendFile(entity,{file:f,forceDocument:!isImage&&!isVideo,progressCallback:p=>circ.set(p)});
+      return m2;
+    }catch(err2){
+      if(canceled||/USER_CANCELED/.test((err2&&err2.message)||'')){toast('已取消上传');return null;}
+      toast('上传失败：'+(err2&&err2.message?err2.message:err2));
+      return null;
+    }
+  }
 }
 async function sendFiles(files){
   if(!currentEntity)return;
   for(const f of files){
-    const isImage=/^image\//.test(f.type||'');
-    const isVideo=/^video\//.test(f.type||'');
-    const card=document.createElement('div');card.className='up-card';card.style.pointerEvents='auto';
-    const circ=makeCircle();const name=document.createElement('div');name.className='up-name';name.textContent=f.name;
-    card.append(circ.el,name);getUploads().appendChild(card);
-    try{
-      // 把浏览器 File 读成 ArrayBuffer 再包成 CustomFile（gramJS 最稳路径），带进度
-      const buf=await f.arrayBuffer();
-      const cf=new CustomFile(f.name,buf.byteLength,'',buf);
-      const opts={file:cf,progressCallback:p=>circ.set(p)};
-      if(isVideo){opts.mimeType=f.type||'video/mp4';opts.supportsStreaming=true;}
-      else if(isImage){opts.mimeType=f.type;}
-      else {opts.forceDocument=true;}
-      const m=await client.sendFile(currentEntity,opts);
-      card.remove();
-      if(m)appendMessage(m,false);
-      el.messages.scrollTop=el.messages.scrollHeight;
-    }catch(err){
-      // 回退：去掉流式/视频属性再发一次
-      try{
-        const buf2=await f.arrayBuffer();
-        const cf2=new CustomFile(f.name,buf2.byteLength,'',buf2);
-        const m=await client.sendFile(currentEntity,{file:cf2,forceDocument:!isImage&&!isVideo});
-        card.remove();if(m)appendMessage(m,false);el.messages.scrollTop=el.messages.scrollHeight;
-      }catch(err2){card.remove();toast('发送失败：'+(err2&&err2.message?err2.message:err2));}
-    }
+    const m=await uploadFileWithProgress(f,currentEntity);
+    if(m){appendMessage(m,false);el.messages.scrollTop=el.messages.scrollHeight;}
   }
 }
 
@@ -1105,31 +1133,65 @@ async function deleteMessage(id){
 }
 
 // ===== 下载 / 分享 =====
-async function downloadMedia(msg,nameOverride){
+// 手机端浏览器（微信/X5/QQ 等"极速"内核）无法处理 blob: 下载，会转交第三方下载器然后失败。
+// 因此手机端优先走系统分享面板（navigator.share + File，可"保存到文件/相册"），失败再回退浏览器下载。
+async function saveBlob(blob,name){
+  const mime=blob.type||'application/octet-stream';
+  const isMobile=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||'');
+  if(isMobile&&navigator.canShare){
+    try{
+      const file=new File([blob],name,{type:mime});
+      if(navigator.canShare({files:[file]})){
+        await navigator.share({files:[file],title:name});
+        return 'share';
+      }
+    }catch(e){
+      if(e&&e.name==='AbortError')return 'share';   // 用户在分享面板点了取消，视为已处理
+      console.warn('[tg] 系统分享保存失败，回退浏览器下载：',e);
+    }
+  }
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');a.href=url;a.download=name;a.style.display='none';
+  document.body.appendChild(a);
+  try{ a.click(); }catch(e){}
+  document.body.removeChild(a);
+  // 设置中开启"下载后自动打开"则新标签页打开（手机可直接预览/长按保存）；iOS 兜底打开
+  if(sGet('tg_autoopen')==='1'){ try{ window.open(url,'_blank'); }catch(e){} }
+  else { try{ const ua=navigator.userAgent||''; if(/iP(ad|hone|od)/.test(ua)) window.open(url,'_blank'); }catch(e){} }
+  setTimeout(()=>URL.revokeObjectURL(url),60000);
+  return 'anchor';
+}
+async function downloadMedia(msg,nameOverride,entityOverride){
   const dl=document.getElementById('dlToast');
+  const info=mediaInfo(msg);
+  const name=nameOverride||(info?info.name:'file');
+  const mime=(info&&info.mime)||'application/octet-stream';
+  const state={cancel:false};   // 取消标记：分段下载循环里每收到一块就检查，立即中断
   const setDl=(pct,txt)=>{ if(!dl)return; dl.classList.add('show'); dl.querySelector('.dl-name').textContent=txt; dl.querySelector('.dl-pct').textContent=Math.round(pct)+'%'; dl.querySelector('.dl-bar > i').style.width=pct+'%'; };
+  const cancelDl=()=>{ if(dl)dl.classList.remove('show'); toast('已取消下载'); };
+  if(dl){const c=dl.querySelector('.dl-cancel');if(c)c.onclick=()=>{state.cancel=true;toast('正在取消下载…');};}
+  let blob=null;
   try{
-    const info=mediaInfo(msg);const name=nameOverride||(info?info.name:'file');
-    const mime=info?info.mime:'application/octet-stream';
-    // 分段流下载（复用已验证的 iterDownload 通道），边下边更新底部进度条，避免一次性缓冲大文件卡死/失败
-    const chunks=[];let got=0;const total=info?info.size:0;
+    const entity=entityOverride||currentEntity||msg.chat||netdiskChannel;
     setDl(0,'开始下载：'+name);
-    const iter=client.iterDownload({file:msg.media,requestSize:524288,msgData:[msg.chat,msg.id]});
-    for await(const chunk of iter){ chunks.push(chunk); got+=chunk.length; setDl(total?got/total*100:0,name); }
-    if(!chunks.length){ if(dl)dl.classList.remove('show'); toast('下载为空'); return; }
-    const url=URL.createObjectURL(new Blob(chunks,{type:mime}));
-    const a=document.createElement('a');a.href=url;a.download=name;a.style.display='none';
-    document.body.appendChild(a);
-    try{ a.click(); }catch(e){}
-    document.body.removeChild(a);
-    // 设置中开启“下载后自动打开”则新标签页打开（手机可直接预览/长按保存）；iOS 兜底打开
-    if(sGet('tg_autoopen')==='1'){ try{ window.open(url,'_blank'); }catch(e){} }
-    else { try{ const ua=navigator.userAgent||''; if(/iP(ad|hone|od)/.test(ua)) window.open(url,'_blank'); }catch(e){} }
-    setDl(100,name);
-    setTimeout(()=>{ if(dl)dl.classList.remove('show'); },1600);
-    setTimeout(()=>URL.revokeObjectURL(url),60000);
-    toast('下载完成：'+name);
-  }catch(e){ if(dl)dl.classList.remove('show'); toast('下载失败：'+e.message); }
+    const chunks=[];let got=0;const total=info?info.size:0;
+    const iter=client.iterDownload({file:msg.media,requestSize:524288,msgData:[entity,msg.id]});
+    for await(const chunk of iter){
+      if(state.cancel){try{await iter.close();}catch(e){}cancelDl();return;}
+      chunks.push(chunk);got+=chunk.length;setDl(total?got/total*100:0,name);
+    }
+    if(!chunks.length){cancelDl();toast('下载为空');return;}
+    blob=new Blob(chunks,{type:mime});
+  }catch(e){
+    if(state.cancel){cancelDl();return;}
+    console.warn('[tg] 分段下载失败，回退整段下载：',e);
+    try{const buf=await client.downloadMedia(msg);if(state.cancel){cancelDl();return;}blob=new Blob([buf],{type:mime});}
+    catch(e2){ if(dl)dl.classList.remove('show'); toast('下载失败：'+(e2&&e2.message?e2.message:e2)); return; }
+  }
+  setDl(100,name);
+  await saveBlob(blob,name);
+  if(dl)dl.classList.remove('show');
+  toast('下载完成：'+name);
 }
 async function shareMedia(msg,nameOverride){
   const info=mediaInfo(msg);const name=nameOverride||(info?info.name:'文件');
@@ -1176,18 +1238,26 @@ function renderViewer(){
     // 先快速拉缩略图作占位，切换瞬间即可看到画面
     client.downloadMedia(msg,{thumb:'m'}).then(buf=>{if(buf&&buf.length&&myToken===viewerToken){el.viewerVideo.poster=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));}}).catch(()=>{});
     el.viewerCap.textContent='缓冲中…';
+    // 边下边播：头部到达先播，之后每 8MB 无缝换更大的源续播（恢复播放位置），全量完成换最终源
+    let partialUrl=null;
+    const setPartial=(blob)=>{
+      if(myToken!==viewerToken)return;
+      const keep=el.viewerVideo.currentTime||0;const wasPaused=el.viewerVideo.paused;
+      if(partialUrl)URL.revokeObjectURL(partialUrl);
+      partialUrl=URL.createObjectURL(blob);
+      el.viewerVideo.src=partialUrl;
+      el.viewerVideo.addEventListener('loadedmetadata',()=>{try{el.viewerVideo.currentTime=keep;}catch(e){}},{once:true});
+      if(!wasPaused)safePlay(el.viewerVideo);
+    };
     // 准流式：头部到达即开播，不等整段下载；百分比实时显示
     streamVideo(msg,viewerEntity,{
       isStale:()=>myToken!==viewerToken,
       onProgress:(p)=>{if(myToken===viewerToken)el.viewerCap.textContent='缓冲中 '+Math.round(Math.min(1,p)*100)+'%';},
-      onPartial:(blob)=>{
-        if(myToken!==viewerToken)return;
-        el.viewerVideo.src=URL.createObjectURL(blob);el.viewerCap.textContent='';
-        safePlay(el.viewerVideo);   // 边下边播
-      },
+      onPartial:(blob)=>{setPartial(blob);if(myToken===viewerToken)el.viewerCap.textContent='';},
       onFull:(blob)=>{
         if(myToken!==viewerToken)return;
         const url=URL.createObjectURL(blob);mediaCache.set(key,url);
+        if(partialUrl){URL.revokeObjectURL(partialUrl);partialUrl=null;}
         const t=el.viewerVideo.currentTime||0;const muted=el.viewerVideo.muted;
         el.viewerVideo.src=url;el.viewerVideo.muted=muted;
         if(t>0)el.viewerVideo.addEventListener('loadedmetadata',()=>{try{el.viewerVideo.currentTime=t;}catch(e){}},{once:true});
@@ -1213,7 +1283,7 @@ function closeViewer(){el.viewer.classList.remove('open');try{el.viewerVideo.pau
 el.viewerClose.onclick=closeViewer;
 el.viewerPrev.onclick=()=>{if(viewerIndex>0){viewerIndex--;renderViewer();}};
 el.viewerNext.onclick=()=>{if(viewerIndex<viewerList.length-1){viewerIndex++;renderViewer();}};
-el.viewerDownload.onclick=()=>{if(viewerList&&viewerList[viewerIndex])downloadMedia(viewerList[viewerIndex]);};
+el.viewerDownload.onclick=()=>{if(viewerList&&viewerList[viewerIndex])downloadMedia(viewerList[viewerIndex],null,viewerEntity);};
 el.viewerShare.onclick=()=>{if(viewerList&&viewerList[viewerIndex])shareMedia(viewerList[viewerIndex]);};
 let touchX=null;
 el.viewer.addEventListener('touchstart',e=>touchX=e.touches[0].clientX);
@@ -1454,7 +1524,7 @@ function renderNetdisk(cat){
 // 卡片「⋯」弹出菜单：下载 / 重命名 / 分享 / 删除
 function openCardMenu(anchor,msg){
   const menu=$('nkCardMenu');menu.innerHTML='';
-  const acts=[['下载',()=>downloadMedia(msg,displayName(msg))],['重命名',()=>renameItem(msg)],['分享',()=>shareMedia(msg,displayName(msg))],['删除',()=>deleteNetdiskItem(msg)]];
+  const acts=[['下载',()=>downloadMedia(msg,displayName(msg),netdiskChannel)],['重命名',()=>renameItem(msg)],['分享',()=>shareMedia(msg,displayName(msg))],['删除',()=>deleteNetdiskItem(msg)]];
   acts.forEach(([label,fn])=>{const b=document.createElement('button');b.textContent=label;if(label==='删除')b.className='danger';b.onclick=()=>{menu.classList.remove('open');fn();};menu.appendChild(b);});
   const r=anchor.getBoundingClientRect();
   menu.style.top=Math.min(r.bottom+6,innerHeight-170)+'px';
@@ -1481,19 +1551,7 @@ el.btnNetdiskUpload.onclick=()=>el.netdiskFileInput.click();
 el.netdiskFileInput.addEventListener('change',async(e)=>{
   if(!netdiskChannel)return;
   for(const f of e.target.files){
-    try{
-      const isImage=/^image\//.test(f.type||'');const isVideo=/^video\//.test(f.type||'');
-      const buf=await f.arrayBuffer();
-      const cf=new CustomFile(f.name,buf.byteLength,'',buf);
-      const opts={file:cf};
-      if(isVideo){opts.mimeType=f.type||'video/mp4';opts.supportsStreaming=true;}
-      else if(isImage){opts.mimeType=f.type;}
-      else {opts.forceDocument=true;}
-      await client.sendFile(netdiskChannel,opts);
-    }catch(err){
-      try{const buf2=await f.arrayBuffer();const cf2=new CustomFile(f.name,buf2.byteLength,'',buf2);await client.sendFile(netdiskChannel,{file:cf2,forceDocument:!isImage&&!isVideo});}
-      catch(err2){toast('上传失败：'+(err2&&err2.message?err2.message:err2));}
-    }
+    await uploadFileWithProgress(f,netdiskChannel);   // 与聊天同款：进度圆环 + 取消按钮
   }
   e.target.value='';loadNetdisk(el.netdiskTabs.querySelector('.sel').dataset.cat);
 });
