@@ -18,7 +18,7 @@ function sDel(k){ try{ window.localStorage.removeItem(k); }catch(e){} try{ docum
 
 // ===== 配置 =====
 // 版本标记：F12 控制台看这行日志即可确认部署是否更新（应与最新发布说明一致）
-const BUILD='v2026.10.29.1';
+const BUILD='v2026.10.29.2';
 console.log('[tg] build', BUILD, '· 大视频上传修复(File直传,>20MB不再失败) + 上传/下载可取消 + 边下边播(头部1.5MB开播,每8MB无缝续源) + 播放按钮SVG统一 + 网盘下载走系统分享');
 // 配置三级回退：构建期环境变量(VITE_*) → 页面全局 window.__TG_CONFIG → localStorage/内存
 // 这样即便直接上传未带密钥的 dist，也能在登录卡片里填一次 API_ID/HASH/代理，免去反复重新打包
@@ -950,8 +950,8 @@ async function renderItem(items, prepend){
       el.messages.insertBefore(row, el.messages.firstChild);   // 消息先置顶
       if(sep)el.messages.insertBefore(sep, row);              // 分隔条压到消息之上
     }else{
-      if(sep)el.messages.insertBefore(sep, row);              // 分隔条在消息之上
-      el.messages.appendChild(row);                           // 消息置底
+      el.messages.appendChild(row);                           // 消息先置底
+      if(sep)el.messages.insertBefore(sep, row);              // 分隔条插到该消息之上（row 已在 DOM 中，否则 insertBefore 会抛错被吞、分隔丢失）
     }
   }catch(e){
     console.warn('[tg] 日期分隔插入失败（不影响消息）：',e&&e.message?e.message:e);
@@ -1010,6 +1010,7 @@ async function playVideo(host,msg,entity){
   const cp=playBtn.querySelector('.vp-ring-cp');
   const icon=playBtn.querySelector('.vp-icon');
   wrap.addEventListener('click',e=>e.stopPropagation());
+  let started=false;let userPaused=false;   // 边下边播控制：是否已起播 / 用户是否主动暂停
   // 左下角圆形进度 = 实时下载进度（不再有中间大进度条）
   function setLoadProgress(p){const t=Math.max(0,Math.min(1,p));cp.style.strokeDashoffset=String(94.2*(1-t));}
   function fmtDur(s){if(!s||!isFinite(s))return '0:00';const m=Math.floor(s/60);const sec=Math.floor(s%60);return m+':'+String(sec).padStart(2,'0');}
@@ -1022,9 +1023,9 @@ async function playVideo(host,msg,entity){
     else if(e&&e.name!=='AbortError')console.warn('play error',e);
   }}
 
-  playBtn.onclick=(e)=>{e.stopPropagation();if(v.paused){safePlay();}else{v.pause();}};
+  playBtn.onclick=(e)=>{e.stopPropagation();if(v.paused){userPaused=false;safePlay();}else{userPaused=true;v.pause();}};
   muteBtn.onclick=(e)=>{e.stopPropagation();v.muted=!v.muted;muteBtn.innerHTML=v.muted?ICONS.mute:ICONS.volume;};
-  v.onclick=(e)=>{e.stopPropagation();if(v.paused)safePlay();else v.pause();};
+  v.onclick=(e)=>{e.stopPropagation();if(v.paused){userPaused=false;safePlay();}else{userPaused=true;v.pause();}};
   v.addEventListener('play',syncIcon);v.addEventListener('pause',syncIcon);
   v.addEventListener('timeupdate',updateTime);v.addEventListener('loadedmetadata',updateTime);
   v.addEventListener('ended',syncIcon);
@@ -1036,12 +1037,13 @@ async function playVideo(host,msg,entity){
   let partialUrl=null;
   const setPartial=(blob)=>{
     if(lastFocusVideo!==msg)return;
-    const keep=v.currentTime||0;const wasPaused=v.paused;
+    const keep=v.currentTime||0;
     if(partialUrl)URL.revokeObjectURL(partialUrl);
     partialUrl=URL.createObjectURL(blob);
     v.src=partialUrl;
     v.addEventListener('loadedmetadata',()=>{try{v.currentTime=keep;}catch(e){}},{once:true});
-    if(!wasPaused)safePlay();
+    // 首次换源即起播；之后仅在“已起播且用户未主动暂停”时续播（修复：初始 paused=true 导致一直等到整段下完才播）
+    if(!started||!userPaused){started=true;safePlay();}
   };
   streamVideo(msg,entity,{
     isStale:()=>lastFocusVideo!==msg,
@@ -1091,22 +1093,33 @@ async function uploadFileWithProgress(f,entity){
   const name=document.createElement('div');name.className='up-name';name.textContent=f.name;
   const cancelBtn=document.createElement('button');cancelBtn.className='up-cancel';cancelBtn.title='取消上传';cancelBtn.innerHTML='✕';
   card.append(circ.el,name,cancelBtn);getUploads().appendChild(card);
-  const opts={file:f,progressCallback:p=>circ.set(p)};
-  if(isVideo){opts.mimeType=f.type||'video/mp4';opts.supportsStreaming=true;}
-  else if(isImage){opts.mimeType=f.type;}
-  else {opts.forceDocument=true;}
   let canceled=false;
-  cancelBtn.onclick=()=>{canceled=true;opts.progressCallback.isCanceled=true;cancelBtn.textContent='…';toast('正在取消上传…');};
+  const pc=p=>circ.set(p);
+  const opts={progressCallback:pc};
+  if(isVideo){opts.mimeType=f.type||'video/mp4';opts.supportsStreaming=true;}
+  else if(isImage){opts.mimeType=f.type||'image/jpeg';}
+  else {opts.forceDocument=true;}
+  const doSend=(file)=>client.sendFile(entity,{file,progressCallback:pc,forceDocument:opts.forceDocument,mimeType:opts.mimeType,supportsStreaming:opts.supportsStreaming});
+  cancelBtn.onclick=()=>{canceled=true;pc.isCanceled=true;cancelBtn.textContent='…';toast('正在取消上传…');};
+  // 关键修复（图片/文件上传失败根因）：
+  // gramJS 2.26.22 在浏览器里会把“裸 File 对象”误判为 InputFileLike，走 getInputMedia 快捷分支，
+  // 内部 media 被置空、sendFile 静默失败（图片尤其明显，视频也受影响）。
+  // 正确做法：把浏览器 File 读成二进制、包装为 CustomFile（buffer 有值，fileToBuffer 直接返回、
+  // 不碰 Node 的 fs），从而进入 uploadFile 的真正上传路径，任意大小/类型均可上传。
+  const makeCF=async()=>{const buf=await f.arrayBuffer();if(canceled)return null;return new CustomFile(f.name,buf.byteLength,'',new Uint8Array(buf));};
   try{
-    const m=await client.sendFile(entity,opts);
+    const cf=await makeCF();if(!cf){card.remove();return null;}
+    const m=await doSend(cf);
     card.remove();return m;
   }catch(err){
     card.remove();
     if(canceled||/USER_CANCELED/.test((err&&err.message)||'')){toast('已取消上传');return null;}
-    console.warn('[tg] 上传失败，回退文件形式重发：',err);
-    // 回退：改为文件形式重发一次（换新的进度回调，取消标记不复用）
+    console.warn('[tg] 上传失败：',err);
+    if(!isImage&&!isVideo){toast('上传失败：'+(err&&err.message?err.message:err));return null;}
+    // 图片/视频首败后，作为纯文件（forceDocument）兜底重发一次
     try{
-      const m2=await client.sendFile(entity,{file:f,forceDocument:!isImage&&!isVideo,progressCallback:p=>circ.set(p)});
+      const cf2=await makeCF();if(!cf2){return null;}
+      const m2=await client.sendFile(entity,{file:cf2,progressCallback:pc,forceDocument:true});
       return m2;
     }catch(err2){
       if(canceled||/USER_CANCELED/.test((err2&&err2.message)||'')){toast('已取消上传');return null;}
@@ -1133,31 +1146,33 @@ async function deleteMessage(id){
 }
 
 // ===== 下载 / 分享 =====
-// 手机端浏览器（微信/X5/QQ 等"极速"内核）无法处理 blob: 下载，会转交第三方下载器然后失败。
-// 因此手机端优先走系统分享面板（navigator.share + File，可"保存到文件/相册"），失败再回退浏览器下载。
+// 下载保存策略（修复"手机端下载进度跑完后调第三方下载器失败"）：
+// 1) iOS Safari 不支持 a[download] 下载 blob → 优先系统分享面板（navigator.share + File，可"存储到文件/相册"），失败再开新窗
+// 2) 安卓/桌面 → 直接触发浏览器原生下载（系统下载管理器，保存到 Download 目录），不调第三方下载器
 async function saveBlob(blob,name){
   const mime=blob.type||'application/octet-stream';
-  const isMobile=/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||'');
-  if(isMobile&&navigator.canShare){
+  const ua=navigator.userAgent||'';
+  const isIOS=/iP(ad|hone|od)/.test(ua);
+  const isMobile=/Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+  // iOS：系统分享面板是最稳的"保存"方式（用户可选"存储到文件"或相册 App）
+  if(isIOS&&navigator.canShare&&navigator.canShare({files:[new File([blob],name,{type:mime})]})){
     try{
-      const file=new File([blob],name,{type:mime});
-      if(navigator.canShare({files:[file]})){
-        await navigator.share({files:[file],title:name});
-        return 'share';
-      }
+      await navigator.share({files:[new File([blob],name,{type:mime})],title:name});
+      return 'share';
     }catch(e){
       if(e&&e.name==='AbortError')return 'share';   // 用户在分享面板点了取消，视为已处理
-      console.warn('[tg] 系统分享保存失败，回退浏览器下载：',e);
+      console.warn('[tg] iOS 分享保存失败，回退打开：',e);
     }
   }
+  // 安卓/桌面：原生 a[download] 触发系统下载管理器（不会调第三方下载器）
   const url=URL.createObjectURL(blob);
-  const a=document.createElement('a');a.href=url;a.download=name;a.style.display='none';
+  const a=document.createElement('a');a.href=url;a.download=name;a.rel='noopener';a.style.display='none';
   document.body.appendChild(a);
-  try{ a.click(); }catch(e){}
+  try{ a.click(); }catch(e){ console.warn('[tg] a.click 下载失败：',e); }
   document.body.removeChild(a);
-  // 设置中开启"下载后自动打开"则新标签页打开（手机可直接预览/长按保存）；iOS 兜底打开
-  if(sGet('tg_autoopen')==='1'){ try{ window.open(url,'_blank'); }catch(e){} }
-  else { try{ const ua=navigator.userAgent||''; if(/iP(ad|hone|od)/.test(ua)) window.open(url,'_blank'); }catch(e){} }
+  // iOS 回退：新窗口打开，由用户长按/菜单保存
+  if(isIOS){ try{ window.open(url,'_blank'); }catch(e){} }
+  else if(isMobile&&sGet('tg_autoopen')==='1'){ try{ window.open(url,'_blank'); }catch(e){} }
   setTimeout(()=>URL.revokeObjectURL(url),60000);
   return 'anchor';
 }
@@ -1239,15 +1254,16 @@ function renderViewer(){
     client.downloadMedia(msg,{thumb:'m'}).then(buf=>{if(buf&&buf.length&&myToken===viewerToken){el.viewerVideo.poster=URL.createObjectURL(new Blob([buf],{type:'image/jpeg'}));}}).catch(()=>{});
     el.viewerCap.textContent='缓冲中…';
     // 边下边播：头部到达先播，之后每 8MB 无缝换更大的源续播（恢复播放位置），全量完成换最终源
-    let partialUrl=null;
+    let partialUrl=null;let started=false;
     const setPartial=(blob)=>{
       if(myToken!==viewerToken)return;
-      const keep=el.viewerVideo.currentTime||0;const wasPaused=el.viewerVideo.paused;
+      const keep=el.viewerVideo.currentTime||0;
       if(partialUrl)URL.revokeObjectURL(partialUrl);
       partialUrl=URL.createObjectURL(blob);
       el.viewerVideo.src=partialUrl;
       el.viewerVideo.addEventListener('loadedmetadata',()=>{try{el.viewerVideo.currentTime=keep;}catch(e){}},{once:true});
-      if(!wasPaused)safePlay(el.viewerVideo);
+      // 首次换源即起播，之后续播（修复：初始 paused=true 导致一直等到整段下完才播）
+      if(!started){started=true;safePlay(el.viewerVideo);}else{safePlay(el.viewerVideo);}
     };
     // 准流式：头部到达即开播，不等整段下载；百分比实时显示
     streamVideo(msg,viewerEntity,{
@@ -1585,4 +1601,36 @@ function injectMobileCss(){
 function backToSidebar(){currentEntity=null;document.body.classList.remove('chat-open');el.chatHeader.style.display='none';el.composer.style.display='none';el.messages.innerHTML='<div class="empty-hint">选择左侧对话开始聊天</div>';el.detailsContent.classList.remove('show');el.detailsPlaceholder.style.display='flex';el.details.classList.remove('mobile-open');}
 el.btnBack.onclick=backToSidebar;
 
+// ===== 主界面滑动/系统返回拦截：避免手机左右滑动手势误退出（弹窗确认/取消）=====
+function showExitConfirm(){
+  const box=document.getElementById('exitConfirm');if(!box)return;
+  box.classList.add('open');
+  const ok=box.querySelector('.ec-ok');const cancel=box.querySelector('.ec-cancel');
+  function cleanup(){ok.removeEventListener('click',onOk);cancel.removeEventListener('click',onCancel);}
+  function onOk(){box.classList.remove('open');cleanup();try{window.close();}catch(e){}toast('已取消退出（浏览器需手动关闭标签页）');}
+  function onCancel(){box.classList.remove('open');cleanup();}
+  ok.addEventListener('click',onOk);cancel.addEventListener('click',onCancel);
+}
+function installSwipeGuard(){
+  // 增加一条历史，使“滑动返回/系统返回”先触发 popstate 而非直接关闭页面
+  history.pushState({tgGuard:true},'',location.href);
+  window.addEventListener('popstate',()=>{
+    // 已打开浮层时，先用返回手势关闭浮层（消耗一次返回），不再弹退出确认
+    const closeIf=(sel)=>{const n=document.querySelector(sel);if(n&&n.classList.contains('open')){n.classList.remove('open');history.pushState({tgGuard:true},'',location.href);return true;}return false;};
+    if(closeIf('#viewer'))return;
+    if(closeIf('#settings'))return;
+    if(closeIf('#mediaBrowser'))return;
+    const cs=document.getElementById('chatSearch');if(cs&&!cs.classList.contains('hidden')){cs.classList.add('hidden');history.pushState({tgGuard:true},'',location.href);return;}
+    // 主界面（网盘打开）时，返回意图 = 退出应用 → 弹确认框
+    if(document.getElementById('netdisk').classList.contains('open')){
+      history.pushState({tgGuard:true},'',location.href);
+      showExitConfirm();
+      return;
+    }
+    // 其它情况（聊天页/侧边栏/登录）：保持在应用内，避免误退出
+    history.pushState({tgGuard:true},'',location.href);
+  });
+}
+
 init();
+installSwipeGuard();
