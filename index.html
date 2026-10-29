@@ -427,6 +427,18 @@
   .dl-cancel:hover{color:var(--tg-danger);background:var(--tg-hover);}
   .dl-bar{height:5px;border-radius:3px;background:var(--tg-panel-2);overflow:hidden;}
   .dl-bar > i{display:block;height:100%;width:0;background:var(--tg-blue);transition:width .15s;}
+  /* 退出确认弹窗（主界面滑动返回时，避免误退出） */
+  #exitConfirm{position:fixed;inset:0;z-index:400;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.45);}
+  #exitConfirm.open{display:flex;}
+  .ec-box{background:var(--tg-panel);border-radius:14px;padding:22px 20px;max-width:300px;width:86vw;box-shadow:0 8px 30px rgba(0,0,0,.3);text-align:center;}
+  .ec-title{font-size:17px;font-weight:700;color:var(--tg-text);margin-bottom:8px;}
+  .ec-text{font-size:13px;color:var(--tg-sub);line-height:1.6;margin-bottom:18px;}
+  .ec-actions{display:flex;gap:10px;}
+  .ec-actions button{flex:1;padding:10px;border-radius:10px;font-size:15px;font-weight:600;}
+  .ec-cancel{background:var(--tg-panel-2);color:var(--tg-text);}
+  .ec-cancel:hover{filter:brightness(.96);}
+  .ec-ok{background:var(--tg-danger);color:#fff;}
+  .ec-ok:hover{filter:brightness(1.05);}
 </style>
 </head>
 <body>
@@ -732,6 +744,18 @@
 
   <div id="chatMenu" class="menu"></div>
   <div id="toast"></div>
+
+  <!-- 退出确认弹窗（主界面滑动返回时弹出，确认/取消） -->
+  <div id="exitConfirm">
+    <div class="ec-box">
+      <div class="ec-title">确定退出吗？</div>
+      <div class="ec-text">您正在应用主界面，向左滑动返回将离开本应用。确定要退出吗？</div>
+      <div class="ec-actions">
+        <button class="ec-cancel">取消</button>
+        <button class="ec-ok">退出</button>
+      </div>
+    </div>
+  </div>
 
   <!-- 登录页（未登录时显示） -->
   <div id="login" class="hidden">
